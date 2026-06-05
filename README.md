@@ -28,5 +28,6 @@ bash ~/.agents/scripts/sync-to-agents.sh --full
 | `00-inquiry-first.md` | true | 대전제 — 정렬 후 실행 (risk triage, blocking 질문) |
 | `communication-style.md` | true | 답변 톤·간결성 |
 | `team-pr-chaining.md` | true | Stacked PR 표기 (team/PR 호스팅 맥락) |
+| `output-writing.md` | false (PR 작성 시 Read) | PR 디스크립션 — 기획/작업/리뷰기한(`-`), 목적 우선·짧은 문장 |
 
 출처는 `etc/sources/` 참고.
