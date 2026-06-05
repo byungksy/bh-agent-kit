@@ -7,7 +7,7 @@
     "description": "에이전트 답변의 톤앤매너 설정 규칙. 과도한 사용자 칭찬 금지 및 객관적·간결조 유지",
     "alwaysApply": true
   },
-  "11st-pr-chaining": {
+  "team-pr-chaining": {
     "description": "Stacked PR 대화·문서 표기 — PR-A/B/C/D 또는 PR-1/2/3/4 통일, merge 순서·target branch 필수",
     "alwaysApply": true
   }

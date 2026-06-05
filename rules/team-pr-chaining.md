@@ -15,14 +15,14 @@
 
 ## 체인 소개 시 필수 (표 1회)
 
-| 라벨 | Bitbucket | source → target | 목적 | merge 순서 |
-|------|-----------|-----------------|------|------------|
+| 라벨 | PR # | source → target | 목적 | merge 순서 |
+|------|------|-----------------|------|------------|
 | PR-A | #135 | `feature/…-schema` → `main` | contract infra | 1 |
 | PR-B | #136 | `feature/…-legacy-fix` → PR-A | legacy fix | 2 |
 | PR-C | #138 | `feature/…-local-hook` → PR-B | pre-commit gate | 3 |
 
 - **target**이 `main`이 아니면 stacked PR임을 명시한다.
-- Bitbucket 번호를 모르면 `TBD` — 라벨·브랜치·순서는 비운 채 두지 않는다.
+- PR 번호를 모르면 `TBD` — 라벨·브랜치·순서는 비운 채 두지 않는다.
 
 ## 에이전트 응답 규칙
 
@@ -30,12 +30,12 @@
 - merge 순서 안내: `PR-A → PR-B → PR-C → main` 형식.
 - scope/deferral(T5 follow-up 등) 기록 시 **Jira + PR 코멘트 + plan** 셋 중 빠진 곳을 사용자에게 알린다.
 
-## PR 제목 패턴 (primer·인프라 계열)
+## PR 제목 패턴 (team·인프라 계열)
 
 ```
 {TICKET} | {에픽 한 줄} | {순번}) {이 PR 역할}
 ```
 
-예: `DEVGAI-146 | context.md 정적 검사 보완 | 3) pre-commit hook — verify-context 로컬 gate`
+예: `TEAM-146 | context.md 정적 검사 보완 | 3) pre-commit hook — verify-context 로컬 gate`
 
 순번은 PR-A=1), PR-B=2) … 와 맞춘다.

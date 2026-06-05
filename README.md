@@ -27,6 +27,6 @@ bash ~/.agents/scripts/sync-to-agents.sh --full
 |------|-------------|------|
 | `00-inquiry-first.md` | true | 대전제 — 정렬 후 실행 (risk triage, blocking 질문) |
 | `communication-style.md` | true | 답변 톤·간결성 |
-| `11st-pr-chaining.md` | true | Stacked PR 표기 (팀/Bitbucket 맥락) |
+| `team-pr-chaining.md` | true | Stacked PR 표기 (team/PR 호스팅 맥락) |
 
 출처는 `etc/sources/` 참고.
