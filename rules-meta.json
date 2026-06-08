@@ -14,5 +14,9 @@
   "output-writing": {
     "description": "PR 디스크립션 작성·수정 시 Read — 기획/작업/리뷰기한(-) 형식, 목적 우선·짧은 문장. 일반 코딩 턴에는 미적용",
     "alwaysApply": false
+  },
+  "prompt-anchor": {
+    "description": "`->`/이거·직전 답 지시 시 대화 맥락 우선. 불필요한 transcript·grep 금지. 애매하면 1문장 질문",
+    "alwaysApply": true
   }
 }
