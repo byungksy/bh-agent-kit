@@ -1,0 +1,68 @@
+#!/bin/bash
+# bh-alert — 알림 발송 (macOS 팝업 + 슬랙 DM)
+#
+# Usage:
+#   bh-alert "메시지"                   # 팝업만
+#   bh-alert "메시지" --slack            # 팝업 + 슬랙 DM
+#   bh-alert --slack "메시지"            # 팝업 + 슬랙 DM
+#   my-task-command && bh-alert "완료" --slack
+#   echo "결과" | bh-alert --slack       # stdin 모드
+
+TITLE="alert-helper"
+
+# 슬랙 인증 정보 — ~/slack-cursor-bot/.env에서 로드
+ENV_FILE="$HOME/slack-cursor-bot/.env"
+if [ -f "$ENV_FILE" ]; then
+  SLACK_BOT_TOKEN=$(grep '^MY_SLACK_BOT_TOKEN=' "$ENV_FILE" | cut -d= -f2)
+  SLACK_DM_USER_ID=$(grep '^SLACK_DM_USER_ID=' "$ENV_FILE" | cut -d= -f2)
+fi
+
+# 옵션 파싱
+USE_SLACK=false
+MSG=""
+SUBTITLE=""
+ARGS=()
+
+for arg in "$@"; do
+  case "$arg" in
+    --slack) USE_SLACK=true ;;
+    *)       ARGS+=("$arg") ;;
+  esac
+done
+
+# stdin 모드
+if [ ! -t 0 ]; then
+  STDIN=$(cat)
+  MSG="${ARGS[0]:-$(echo "$STDIN" | head -1)}"
+  SUBTITLE="${ARGS[1]:-}"
+  # 슬랙엔 전체 내용 전송
+  SLACK_BODY="$STDIN"
+else
+  MSG="${ARGS[0]:-실행 완료}"
+  SUBTITLE="${ARGS[1]:-}"
+  SLACK_BODY="$MSG"
+fi
+
+# macOS 팝업
+if [ -n "$SUBTITLE" ]; then
+  osascript -e "display notification \"${MSG}\" with title \"${TITLE}\" subtitle \"${SUBTITLE}\""
+  open -g "hammerspoon://alert?msg=${TITLE}: ${SUBTITLE} - ${MSG}"
+else
+  osascript -e "display notification \"${MSG}\" with title \"${TITLE}\""
+  open -g "hammerspoon://alert?msg=${TITLE}: ${MSG}"
+fi
+
+# 슬랙 DM
+if [ "$USE_SLACK" = true ]; then
+  PAYLOAD=$(python3 -c "
+import json, sys
+body = sys.argv[1]
+msg = {'channel': '${SLACK_DM_USER_ID}', 'text': body}
+print(json.dumps(msg))
+" "$SLACK_BODY")
+
+  curl -s -X POST https://slack.com/api/chat.postMessage \
+    -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "$PAYLOAD" > /dev/null
+fi

@@ -1,0 +1,82 @@
+#!/bin/bash
+# Cursor 에이전트 idle 감지 → TIL 리마인더 (+ agents 세션 시 level-up 제안)
+# launchd에 의해 주기적으로 실행됨 (60초 간격)
+# 마지막 에이전트 응답 후 3분(180초) 이상 idle이면 터미널 알림
+
+IDLE_THRESHOLD=180  # 3분
+# lock은 "현재 idle 구간"당 1회 알림을 막기 위한 것.
+# 에이전트가 다시 활성화(idle 해제)되면 lock을 지워서 다음 idle 구간에 다시 알림.
+LOCK_FILE="/tmp/bh-til-idle.lock"
+LOG_FILE="${HOME}/.agents/logs/til-idle-check.log"
+
+# 최근 transcript에 agents 자산(룰·스킬·훅) 작업 신호가 있는지
+session_suggests_agent_level_up() {
+  local file="$1"
+  [ -f "$file" ] || return 1
+  # pipefail 환경에서 tail|grep는 매치 시 SIGPIPE(141)로 실패할 수 있음 → process substitution 사용
+  /usr/bin/grep -qiE \
+    '~/.agents|agents-config|sync-to-agents|rules-meta\.json|hooks\.json|/agents/|bh-agent-level-up|agent-level-up|grill-me|pr-chaining|룰로 승격|에이전트 룰|스킬.*개선|agents.*승격' \
+    < <(tail -n 200 "$file" 2>/dev/null)
+}
+
+# Cursor 실행 중인지 확인
+if ! pgrep -f "Cursor.app/Contents/MacOS/Cursor" > /dev/null 2>&1; then
+  exit 0
+fi
+
+# 모든 워크스페이스의 agent-transcripts에서 가장 최신 jsonl mtime 추적
+LATEST_MTIME=0
+LATEST_FILE=""
+while IFS= read -r -d '' f; do
+  MTIME=$(stat -f '%m' "$f" 2>/dev/null || stat -c '%Y' "$f" 2>/dev/null || echo 0)
+  if [ "$MTIME" -gt "$LATEST_MTIME" ]; then
+    LATEST_MTIME="$MTIME"
+    LATEST_FILE="$f"
+  fi
+done < <(find "$HOME/.cursor/projects" -name "*.jsonl" -print0 2>/dev/null)
+
+if [ "$LATEST_MTIME" -eq 0 ]; then
+  exit 0
+fi
+
+NOW=$(date '+%s')
+ELAPSED=$(( NOW - LATEST_MTIME ))
+
+# 에이전트 활성 상태 (idle 아님) → lock 해제하고 종료
+# 이렇게 해야 다음 idle 구간이 시작될 때 새 알림을 보낼 수 있음
+if [ "$ELAPSED" -lt "$IDLE_THRESHOLD" ]; then
+  rm -f "$LOCK_FILE"
+  exit 0
+fi
+
+# idle 상태 진입. 이 idle 구간에서 이미 알림 보냈으면 중복 방지
+if [ -f "$LOCK_FILE" ]; then
+  exit 0
+fi
+
+# lock 생성 (이 idle 구간 내 중복 알림 방지)
+touch "$LOCK_FILE"
+
+mkdir -p "$(dirname "$LOG_FILE")"
+
+NOTIFY_TITLE="📚 TIL 리마인더"
+NOTIFY_SUBTITLE="$(date '+%H:%M') 기준 3분 idle"
+LOG_SUFFIX="TIL 리마인더 발송"
+
+if session_suggests_agent_level_up "$LATEST_FILE"; then
+  NOTIFY_BODY="TIL: '/til' · agents 세션: '/bh-agent-level-up' (승인 후 반영)"
+  LOG_SUFFIX="TIL + level-up 제안 알림 발송"
+else
+  NOTIFY_BODY="Cursor에서 '/til' 입력 시 AI가 세션을 요약해서 자동 기록합니다."
+fi
+
+# macOS 알림 전송
+osascript -e "display notification \"${NOTIFY_BODY}\" with title \"${NOTIFY_TITLE}\" subtitle \"${NOTIFY_SUBTITLE}\" sound name \"Ping\"" 2>/dev/null
+
+# Hammerspoon 토스트 알림 추가
+open -g "hammerspoon://alert?msg=${NOTIFY_TITLE} - ${NOTIFY_BODY}"
+
+# 로그에도 기록
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] idle ${ELAPSED}초 경과 — ${LOG_SUFFIX} (마지막 활동: $LATEST_FILE)" >> "$LOG_FILE"
+
+exit 0

@@ -1,0 +1,56 @@
+#!/bin/bash
+
+# Gas Mask Local hosts directory
+GASMASK_DIR="$HOME/Library/Gas Mask/Local"
+
+if [ ! -d "$GASMASK_DIR" ]; then
+    echo "❌ Gas Mask Local 디렉토리를 찾을 수 없습니다: $GASMASK_DIR"
+    exit 1
+fi
+
+# fzf 설치 여부 확인
+if ! command -v fzf &> /dev/null; then
+    echo "❌ fzf가 설치되어 있지 않습니다. brew install fzf로 설치해 주세요."
+    exit 1
+fi
+
+# 현재 활성화된 프로필 찾기 (/etc/hosts와 Gas Mask 내 프로필 파일 실시간 cmp 비교)
+CURRENT_PROFILE="Unknown (or Custom)"
+for file in "$GASMASK_DIR"/*.hst; do
+    if [ -f "$file" ] && cmp -s "/etc/hosts" "$file"; then
+        CURRENT_PROFILE=$(basename "$file" .hst)
+        break
+    fi
+done
+
+# .hst 파일 목록을 읽어서 fzf로 선택 받음
+SELECTED_FILE_NAME=$(find "$GASMASK_DIR" -name "*.hst" -exec basename {} \; | fzf \
+    --prompt="🔍 Select Gas Mask Hosts Profile: " \
+    --header="📌 Current Active: $CURRENT_PROFILE" \
+    --height=40% \
+    --layout=reverse \
+    --border)
+
+# 선택하지 않고 취소한 경우
+if [ -z "$SELECTED_FILE_NAME" ]; then
+    echo "🚫 취소되었습니다."
+    exit 0
+fi
+
+SELECTED_FILE_PATH="$GASMASK_DIR/$SELECTED_FILE_NAME"
+
+# /etc/hosts 덮어쓰기 수행 (sudo 권한 필요)
+echo "🔒 Hosts 전환을 위해 관리자 권한(sudo)이 필요합니다."
+if sudo cp "$SELECTED_FILE_PATH" /etc/hosts; then
+    # DNS 캐시 초기화
+    sudo dscacheutil -flushcache
+    sudo killall -HUP mDNSResponder
+    
+    # Hammerspoon 토스트 알림 추가
+    open -g "hammerspoon://alert?msg=✅ Hosts: [${SELECTED_FILE_NAME%.hst}] 전환 완료!"
+    
+    echo "✅ Hosts 파일이 성공적으로 전환되었습니다: [${SELECTED_FILE_NAME%.hst}]"
+else
+    echo "❌ Hosts 파일 전환에 실패했습니다."
+    exit 1
+fi

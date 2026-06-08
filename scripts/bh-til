@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# TIL(Today I Learned) 한 줄 메모를 파일에 누적한다.
+# 요약·출처는 에이전트(11st-til 스킬)가 담당. 이 스크립트는 저장만 한다.
+TIL_FILE="${TIL_FILE:-$HOME/.til.md}"
+TODAY=$(date '+%Y-%m-%d')
+
+if [ $# -eq 0 ]; then
+  echo "=== TIL ($TODAY) ==="
+  awk -v date="$TODAY" '/^## / { in_section = ($0 == "## " date) } in_section { print }' "$TIL_FILE" 2>/dev/null | grep -v "^## " || echo "(오늘 기록 없음)"
+  echo ""
+  echo -n "오늘 배운 것: "
+  read -r MEMO
+else
+  MEMO="$*"
+fi
+
+[ -z "$MEMO" ] && exit 0
+
+# 날짜 헤더가 없으면 추가
+if ! grep -q "## $TODAY" "$TIL_FILE" 2>/dev/null; then
+  echo "" >> "$TIL_FILE"
+  echo "## $TODAY" >> "$TIL_FILE"
+fi
+
+echo "- $MEMO" >> "$TIL_FILE"
+echo "✅ 저장됨: $MEMO"
+echo "📁 $TIL_FILE"
+
+# 저장 완료 macOS 알림
+SECTION=$(awk -v date="$TODAY" '/^## / { in_section = ($0 == "## " date) } in_section && /^- / { count++ } END { print count+0 }' "$TIL_FILE" 2>/dev/null)
+COUNT=${SECTION:-1}
+osascript -e "display notification \"$MEMO\" with title \"📚 TIL 저장 완료\" subtitle \"오늘 ${COUNT}번째 기록\" sound name \"Glass\"" 2>/dev/null
+
+# Hammerspoon 토스트 알림 추가
+open -g "hammerspoon://alert?msg=📚 TIL 저장 완료 (오늘 ${COUNT}번째)"
