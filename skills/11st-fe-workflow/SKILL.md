@@ -1,0 +1,194 @@
+---
+name: 11st-workflow
+description: |
+  로직이나 프로세스 설명을 Mermaid 다이어그램 기반의 워크플로우로 시각화하여 HTML 및 Markdown 파일로 생성 및 저장한다.
+  
+  트리거 키워드:
+  - 명령어: /11st-workflow
+  - 한국어: "로직을 workflow로 그려줘", "설명을 workflow로 해줘", "워크플로우 그려줘", "워크플로우로 설명해줘", "mermaid로 그려줘", "로직 시각화", "시각화해줘"
+  - 영어: "draw workflow", "explain with workflow", "visualize logic"
+  
+  Do NOT use for: 일반 텍스트 문서 작성, 코드 다이어그램이 아닌 단순 markdown 문서 작성
+---
+
+# 11st Workflow
+
+로직이나 프로세스를 Mermaid 기반의 시각적 워크플로우 다이어그램으로 생성하고, 이를 브라우저에서 즉시 visualize 완료된 상태로 볼 수 있도록 HTML 파일로 저장하여 사용자에게 제공한다.
+
+## 명령어
+
+| 명령어 | 설명 |
+|--------|------|
+| `/11st-workflow` | 입력된 코드나 컨텍스트를 분석하여 Mermaid 워크플로우 다이어그램을 생성하고 HTML 및 Markdown 파일로 저장 |
+
+## 스킬 유형
+- **Encoded Preference**: 사용자의 다이어그램 시각화 및 파일 저장 선호 방식을 구현한 스킬.
+
+## 워크플로우
+
+### 1. 대상 분석
+- 시각화가 필요한 로직, 흐름 또는 프로세스 설명을 분석한다.
+- 분석 대상이 복잡한 경우, 핵심 흐름과 예외 흐름(에러 처리, 대체 경로)을 명확하게 분리한다.
+
+### 2. 다이어그램 설계
+- Mermaid 문법을 사용하여 다이어그램을 작성한다.
+- 흐름의 특성에 따라 알맞은 다이어그램 형식을 선택한다:
+  - **graph TD / LR**: 일반적인 순서도, 의사결정 트리, 아키텍처 흐름
+  - **sequenceDiagram**: 객체/시스템 간 메시지 교환 흐름 (API 통신, 컴포넌트 생명주기)
+  - **stateDiagram-v2**: 복잡한 상태 머신, 컴포넌트 상태 변화
+- Mermaid 문법 에러가 발생하지 않도록 괄호`()`, 대괄호`[]`, 특수문자 처리를 철저히 검증한다. (예: 노드 텍스트에 괄호가 들어가면 쌍따옴표 `""`로 감싸기)
+
+### 3. 공통 에셋 및 저장 경로 설정
+- 다이어그램 관련 파일은 **MUST** 홈 디렉터리 하위의 `~/ai-workflow/diagrams/` 디렉터리(절대경로 `/Users/a1101969/ai-workflow/diagrams/`)에 저장한다.
+- `~/ai-workflow/diagrams/assets/` 폴더가 존재하지 않거나 공통 에셋이 없다면 에이전트가 **자동으로 생성**해 주어야 한다.
+
+#### 공통 스타일 (`~/ai-workflow/diagrams/assets/style.css`):
+```css
+:root {
+  --bg-color: #0d1117;
+  --card-bg: #161b22;
+  --text-color: #c9d1d9;
+  --text-muted: #8b949e;
+  --border-color: #30363d;
+  --accent-color: #58a6ff;
+}
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  margin: 0;
+  padding: 40px 20px;
+  display: flex;
+  justify-content: center;
+  min-height: 100vh;
+  box-sizing: border-box;
+}
+.container {
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+  padding: 40px;
+  max-width: 1200px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.header {
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 24px;
+  margin-bottom: 32px;
+}
+h1 {
+  font-size: 28px;
+  font-weight: 700;
+  margin: 0 0 12px 0;
+  background: linear-gradient(45deg, #58a6ff, #bc8cff);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.description {
+  color: var(--text-muted);
+  font-size: 15px;
+  line-height: 1.6;
+  margin: 0;
+}
+.diagram-wrapper {
+  position: relative;
+  background: #0d1117;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 30px;
+  display: flex;
+  justify-content: center;
+  overflow-x: auto;
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+.mermaid {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+.mermaid svg {
+  max-width: 100% !important;
+}
+.footer {
+  margin-top: 32px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.badge {
+  background: rgba(88, 166, 255, 0.1);
+  color: var(--accent-color);
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-weight: 500;
+  border: 1px solid rgba(88, 166, 255, 0.2);
+}
+```
+
+#### 공통 스크립트 (`~/ai-workflow/diagrams/assets/mermaid-init.js`):
+```javascript
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'neutral',
+  securityLevel: 'loose',
+  flowchart: { useMaxWidth: true, htmlLabels: true, curve: 'basis' }
+});
+```
+
+### 4. 시각화 파일 생성 (HTML & Markdown)
+- 각 개별 다이어그램은 `~/ai-workflow/diagrams/` 디렉터리에 `{업무명/기능명}-workflow.html` 및 `{업무명/기능명}-workflow.md` 파일로 저장한다.
+- 개별 HTML 파일은 공통 에셋(`style.css`와 `mermaid-init.js`)을 상대 경로(./assets/style.css 등)로 링크하여 가져오도록 설계한다.
+
+#### 개별 HTML 템플릿 표준:
+```html
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Workflow - {context}</title>
+  <!-- Google Fonts: Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <!-- 공통 에셋 로드 (상대경로) -->
+  <link rel="stylesheet" href="./assets/style.css">
+  <script type="module" src="./assets/mermaid-init.js"></script>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>{Workflow 타이틀}</h1>
+      <p class="description">{프로세스에 대한 상세한 요약 설명 또는 안내}</p>
+    </div>
+    <div class="diagram-wrapper">
+      <pre class="mermaid">
+{Mermaid 다이어그램 본문}
+      </pre>
+    </div>
+    <div class="footer">
+      <span>Generated by 11st Workflow Assistant</span>
+      <span class="badge">Mermaid v10</span>
+    </div>
+  </div>
+</body>
+</html>
+```
+
+### 5. 사용자 안내
+- 저장 후, 사용자에게 생성된 HTML 파일과 Markdown 파일의 절대 경로 링크(file:///... 형식)를 마크다운 링크로 제공한다.
+- 해당 파일을 브라우저로 여는 방법(예: 파일 클릭 또는 `open` 명령어)을 간략하게 안내한다.
+- **예시**:
+  > 🎉 워크플로우 시각화 파일 생성이 완료되었습니다!
+  > - HTML 파일 (브라우저용): [auth-flow-workflow.html](file:///Users/a1101969/ai-workflow/diagrams/auth-flow-workflow.html)
+  > - Markdown 파일 (IDE용): [auth-flow-workflow.md](file:///Users/a1101969/ai-workflow/diagrams/auth-flow-workflow.md)
+  > 
+  > 브라우저에서 HTML 파일을 더블 클릭하거나 CLI에서 `open /Users/a1101969/ai-workflow/diagrams/auth-flow-workflow.html`를 실행하여 시각화된 워크플로우를 보실 수 있습니다.
