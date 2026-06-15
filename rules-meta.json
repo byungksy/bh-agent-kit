@@ -1,6 +1,6 @@
 {
   "00-inquiry-first": {
-    "description": "대전제 — 정렬 후 실행. Risk triage, blocking 질문, assumption log, trust boundary. 모든 alwaysApply 행동 룰보다 우선.",
+    "description": "대전제 — 정렬 후 실행. Risk triage, blocking 질문, assumption log, trust boundary. 매 응답 맨 끝 inquiry-first footer 한 줄 필수.",
     "alwaysApply": true
   },
   "communication-style": {

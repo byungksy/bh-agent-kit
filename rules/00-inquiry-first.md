@@ -136,3 +136,43 @@ blocking 답·`defaults`·명시 승인 후:
 - [ ] Medium+에서 blocking 질문을 건너뛰지 않았는가
 - [ ] High에서 명시 승인 없이 부작용을 내지 않았는가
 - [ ] "빨리 답변"이 "확인 생략"으로 해석되지 않았는가
+- [ ] §9 footer 한 줄을 답변 **맨 끝**에 넣었는가
+
+---
+
+## §9 Response footer (MUST)
+
+**모든 assistant 응답** 맨 끝에 inquiry-first 준수 상태를 **한 줄**로 남긴다.
+
+```text
+inquiry-first: {등급} — {상태 한 줄}
+```
+
+| 필드 | 값 |
+|------|-----|
+| `{등급}` | `Low` · `Medium` · `High` · `N/A` |
+| `{상태 한 줄}` | 이번 턴 triage·질문·승인·쓰기 여부 (약 15~60자, 건조하게) |
+
+**등급 가이드**
+
+- `N/A` — 룰·메타 질문, 작업 triage·쓰기·배포 없음
+- `Low` — 가정 명시 후 진행, 또는 읽기 전용·사실 조회만
+- `Medium` — blocking 질문·assumption log·재진술 중 하나 이상 해당
+- `High` — destructive·배포·publish 전 명시 승인 대기 또는 승인 후 실행
+
+**예시**
+
+```text
+inquiry-first: N/A — 룰 확인만, 부작용 없음
+inquiry-first: Low — repo 조회로 사실 확정, 추측 없음
+inquiry-first: Medium — blocking 2건, 승인 전 구현·패치 없음
+inquiry-first: High — push 대기, 명시 승인 요청
+inquiry-first: Low — 사용자 "진행" 명시, 승인 범위 내 커밋 완료
+```
+
+**예외 (footer 생략 가능)**
+
+- 사용자가 "footer 생략" 등 명시
+- harness 체크포인트 **코드블록만** 단독 출력하는 턴 (체크포인트 직후 한 줄 footer는 **추가**)
+
+`communication-style` 간결성보다 본 절이 우선한다 (사용자가 footer를 요구한 경우 포함).
