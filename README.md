@@ -31,11 +31,13 @@ bash ~/.agents/scripts/sync-to-agents.sh --full
 | `communication-style.md` | true | 답변 톤·간결성 |
 | `team-pr-chaining.md` | true | Stacked PR 표기 (team/PR 호스팅 맥락) |
 | `output-writing.md` | false (PR 작성 시 Read) | PR 디스크립션 — 기획/작업/리뷰기한(`-`), 목적 우선·짧은 문장 |
+| `session-handoff.md` | true | 작업 마무리·다음 액션 8항 (로컬·push·PR·배포·브라우저·스크립트·질문 앵커) |
 
 ## 스킬 목록
 
 | 경로 | 요약 |
 |------|------|
 | `skills/grill-me/` | 구현·플랜·PR 스택 착수 전 G1–G15 검증 (grill-me, 플랜 검증) |
+| `skills/bh-agent-level-up/` | 세션 인사이트 분류·스테이징·SSOT 승격 (primer/rule/TIL) |
 
 출처는 `etc/sources/` 참고.

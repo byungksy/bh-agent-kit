@@ -205,4 +205,8 @@ next: primer-update PR / agent-scripts commit (미요청)
 
 ## GOTCHAS
 
-`references/GOTCHAS.md` 또는 동일 디렉터리 `GOTCHAS.md` 참고.
+`GOTCHAS.md` · `references/GOTCHAS.md` 참고.
+
+## Session handoff (다음 액션)
+
+작업 구간 마무리·「다음에 뭐 해?」 응답 전: **`session-handoff` 룰** + `references/session-handoff-harness.md` Read. git/PR/배포/브라우저/스크립트/후속 질문 앵커 8항 빠짐없이.

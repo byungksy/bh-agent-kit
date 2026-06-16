@@ -18,5 +18,9 @@
   "prompt-anchor": {
     "description": "`->`/이거·직전 답 지시 시 대화 맥락 우선. 불필요한 transcript·grep 금지. 애매하면 1문장 질문",
     "alwaysApply": true
+  },
+  "session-handoff": {
+    "description": "작업 마무리·다음 액션 질문 시 로컬/push/PR/배포/브라우저/스크립트/후속 질문 앵커 8항 필수",
+    "alwaysApply": true
   }
 }
