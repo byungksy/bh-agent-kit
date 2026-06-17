@@ -14,13 +14,11 @@ DAYS_EN=("Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat")
 MAX_OFFSET=13
 
 get_date_with_offset() {
-  date -v-${1}d +%Y-%m-%d
+  python3 -c "import datetime; print((datetime.date.today() + datetime.timedelta(days=${1})).strftime('%Y-%m-%d'))"
 }
 
 get_weekday_en() {
-  local dow
-  dow=$(date -j -f "%Y-%m-%d" "$1" "+%w" 2>/dev/null || date -d "$1" "+%w" 2>/dev/null)
-  echo "${DAYS_EN[$dow]}"
+  python3 -c "import datetime; d = datetime.datetime.strptime('$1', '%Y-%m-%d'); print(d.strftime('%a'))"
 }
 
 resolve_workspace_path() {
@@ -77,39 +75,64 @@ resolve_workspace_path() {
 #   fzf reload에서 호출. 세션 목록을 stdout으로 출력
 # ═══════════════════════════════════════════════════════════════
 if [[ "${1:-}" == "--collect" ]]; then
-  TARGET_DATE="${2:-$(date +%Y-%m-%d)}"
+  TARGET_DATE="${2:-$(python3 -c "import datetime; print(datetime.date.today().strftime('%Y-%m-%d'))")}"
   FROM_HOUR="${3:-08:00}"
-  START_TIME="${TARGET_DATE} ${FROM_HOUR}:00"
-  END_TIME="${TARGET_DATE} 23:59:59"
 
-  find "$CURSOR_PROJECTS" -name "*.jsonl" -path "*/agent-transcripts/*" -newermt "$START_TIME" ! -newermt "$END_TIME" -print0 2>/dev/null \
-    | while IFS= read -r -d '' f; do
-      mod=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M" "$f" 2>/dev/null || stat --format="%y" "$f" 2>/dev/null | cut -c1-16)
-      echo "$mod|$f"
-    done \
-    | sort \
-    | while IFS='|' read -r mod filepath; do
-      uuid=$(basename "$filepath" .jsonl)
-      project_dir=$(echo "$filepath" | sed "s|${CURSOR_PROJECTS}/||" | cut -d'/' -f1)
-      project_name=$(echo "$project_dir" | sed 's/Users-a1101969-WebstormProjects-//;s/Users-a1101969-//;s/Users-a1101969/home/')
+  python3 - "$CURSOR_PROJECTS" "$TARGET_DATE" "$FROM_HOUR" <<'PYEOF'
+import os, sys, json, re, datetime
 
-      query=$(head -1 "$filepath" | python3 -c "
-import sys, json, re
+cursor_projects = sys.argv[1]
+target_date_str = sys.argv[2]
+from_hour = sys.argv[3]
+
 try:
-    obj = json.loads(sys.stdin.read())
-    for c in obj.get('message',{}).get('content',[]):
-        if c.get('type') == 'text':
-            m = re.search(r'<user_query>\s*(.*?)\s*</user_query>', c['text'], re.DOTALL)
-            if m:
-                q = m.group(1).strip().replace('\n', ' ')[:80]
-                print(q)
-                break
-except:
-    pass
-" 2>/dev/null)
-      [ -z "$query" ] && query="(내용 없음)"
-      printf "%s  %-26s  %s\t%s\n" "$mod" "$project_name" "$query" "$uuid"
-    done
+    start_time = datetime.datetime.strptime(f"{target_date_str} {from_hour}:00", "%Y-%m-%d %H:%M:%S")
+    end_time = datetime.datetime.strptime(f"{target_date_str} 23:59:59", "%Y-%m-%d %H:%M:%S")
+except Exception:
+    sys.exit(1)
+
+matched_files = []
+for root, dirs, files in os.walk(cursor_projects):
+    if "agent-transcripts" in root:
+        for f in files:
+            if f.endswith(".jsonl"):
+                filepath = os.path.join(root, f)
+                try:
+                    mtime = datetime.datetime.fromtimestamp(os.path.getmtime(filepath))
+                    if start_time <= mtime <= end_time:
+                        matched_files.append((mtime, filepath))
+                except Exception:
+                    continue
+
+matched_files.sort(key=lambda x: x[0])
+
+for mtime, filepath in matched_files:
+    mod = mtime.strftime("%Y-%m-%d %H:%M")
+    uuid = os.path.splitext(os.path.basename(filepath))[0]
+    rel_path = os.path.relpath(filepath, cursor_projects)
+    parts = rel_path.split(os.sep)
+    project_dir = parts[0] if parts else ""
+    project_name = project_dir.replace("Users-a1101969-WebstormProjects-", "").replace("Users-a1101969-", "").replace("Users-a1101969", "home")
+    query = "(내용 없음)"
+    try:
+        with open(filepath, "r", encoding="utf-8") as fh:
+            first_line = fh.readline().strip()
+            if first_line:
+                obj = json.loads(first_line)
+                content_list = obj.get('message', {}).get('content', [])
+                if isinstance(content_list, str):
+                    content_list = [{"type": "text", "text": content_list}]
+                for c in content_list:
+                    if isinstance(c, dict) and c.get('type') == 'text':
+                        text = c.get('text', '')
+                        m = re.search(r'<user_query>\s*(.*?)\s*</user_query>', text, re.DOTALL)
+                        if m:
+                            query = m.group(1).strip().replace('\n', ' ')[:80]
+                            break
+    except Exception:
+        pass
+    print(f"{mod}  {project_name:<26}  {query}\t{uuid}")
+PYEOF
 
   exit 0
 fi
@@ -120,23 +143,23 @@ fi
 # ═══════════════════════════════════════════════════════════════
 if [[ "${1:-}" == "--nav" ]]; then
   OFFSET_FILE="$2"
-  DIRECTION="$3"
-  FROM_HOUR="$4"
+  FROM_HOUR="$3"
+
+  # header가 offset 업데이트 완료 신호(.done)를 보낼 때까지 대기 (최대 100ms)
+  count=0
+  while [ ! -f "${OFFSET_FILE}.done" ]; do
+    sleep 0.01
+    count=$((count + 1))
+    if [ $count -ge 10 ]; then
+      break
+    fi
+  done
+  rm -f "${OFFSET_FILE}.done"
 
   current=$(cat "$OFFSET_FILE" 2>/dev/null || echo "0")
-  [[ -z "$current" || ! "$current" =~ ^[0-9]+$ ]] && current=0
+  [[ -z "$current" || ! "$current" =~ ^-?[0-9]+$ ]] && current=0
 
-  if [[ "$DIRECTION" == "prev" ]]; then
-    new_offset=$((current + 1))
-    [ $new_offset -gt $MAX_OFFSET ] && new_offset=$MAX_OFFSET
-  else
-    new_offset=$((current - 1))
-    [ $new_offset -lt 0 ] && new_offset=0
-  fi
-
-  echo "$new_offset" > "${OFFSET_FILE}.tmp"
-  mv "${OFFSET_FILE}.tmp" "$OFFSET_FILE"
-  target=$(get_date_with_offset "$new_offset")
+  target=$(get_date_with_offset "$current")
   "$SCRIPT_PATH" --collect "$target" "$FROM_HOUR" | tail -10 | cut -f1
   exit 0
 fi
@@ -148,18 +171,39 @@ fi
 if [[ "${1:-}" == "--header" ]]; then
   OFFSET_FILE="$2"
   FROM_HOUR="$3"
+  DIRECTION="${4:-}"
+
+  # DIRECTION(prev/next)이 명시적으로 주어졌을 때만 즉시 offset을 변경
+  if [[ -n "$DIRECTION" ]]; then
+    current=$(cat "$OFFSET_FILE" 2>/dev/null || echo "0")
+    [[ -z "$current" || ! "$current" =~ ^-?[0-9]+$ ]] && current=0
+
+    if [[ "$DIRECTION" == "prev" ]]; then
+      new_offset=$((current - 1))
+      [ $new_offset -lt -$MAX_OFFSET ] && new_offset=-$MAX_OFFSET
+    else
+      new_offset=$((current + 1))
+      [ $new_offset -gt 0 ] && new_offset=0
+    fi
+    echo "$new_offset" > "${OFFSET_FILE}.tmp"
+    mv "${OFFSET_FILE}.tmp" "$OFFSET_FILE"
+    
+    # nav가 읽을 수 있도록 완료 신호 생성
+    touch "${OFFSET_FILE}.done"
+  fi
 
   off=$(cat "$OFFSET_FILE" 2>/dev/null || echo "0")
-  [[ -z "$off" || ! "$off" =~ ^[0-9]+$ ]] && off=0
+  [[ -z "$off" || ! "$off" =~ ^-?[0-9]+$ ]] && off=0
   d=$(get_date_with_offset "$off")
   weekday=$(get_weekday_en "$d")
 
   if [ "$off" -eq 0 ]; then
     label="Today"
-  elif [ "$off" -eq 1 ]; then
+  elif [ "$off" -eq -1 ]; then
     label="Yesterday"
   else
-    label="${off}d ago"
+    abs_off=$(( -off ))
+    label="${abs_off}d ago"
   fi
 
   echo "📋 ${d} (${weekday}, ${label}) ${FROM_HOUR}~ — [Left/Right] Nav, [Tab] Preview, [Enter] Resume, [Ctrl-R] GUI Open, [Esc] Cancel"
@@ -289,7 +333,7 @@ fi
 # ═══════════════════════════════════════════════════════════════
 
 FROM_HOUR="08:00"
-TARGET_DATE=$(date +%Y-%m-%d)
+TARGET_DATE=$(python3 -c "import datetime; print(datetime.date.today().strftime('%Y-%m-%d'))")
 LIST_ONLY=false
 
 while [[ $# -gt 0 ]]; do
@@ -364,14 +408,14 @@ offset_file=$(mktemp)
 echo "0" > "$offset_file"
 ACTION_FILE=$(mktemp)
 echo "resume" > "$ACTION_FILE"
-trap "rm -f $offset_file $ACTION_FILE" EXIT
+trap "rm -f $offset_file $ACTION_FILE ${offset_file}.done" EXIT
 
 weekday=$(get_weekday_en "$TARGET_DATE")
 init_header="📋 ${TARGET_DATE} (${weekday}, Today) ${FROM_HOUR}~ — [Left/Right] Nav, [Tab] Preview, [Enter] Resume, [Ctrl-R] GUI Open, [Esc] Cancel"
 
-nav_left="${SCRIPT_PATH} --nav ${offset_file} prev ${FROM_HOUR}"
-nav_right="${SCRIPT_PATH} --nav ${offset_file} next ${FROM_HOUR}"
-hdr_cmd="${SCRIPT_PATH} --header ${offset_file} ${FROM_HOUR}"
+nav_cmd="${SCRIPT_PATH} --nav ${offset_file} ${FROM_HOUR}"
+hdr_left="${SCRIPT_PATH} --header ${offset_file} ${FROM_HOUR} prev"
+hdr_right="${SCRIPT_PATH} --header ${offset_file} ${FROM_HOUR} next"
 detail_cmd="${SCRIPT_PATH} --detail {} ${offset_file} ${FROM_HOUR}"
 
 selected=$("$SCRIPT_PATH" --collect "$TARGET_DATE" "$FROM_HOUR" \
@@ -387,8 +431,8 @@ selected=$("$SCRIPT_PATH" --collect "$TARGET_DATE" "$FROM_HOUR" \
         --prompt="세션 선택 > " \
         --preview="$detail_cmd" \
         --preview-window="right:50%:wrap:hidden" \
-        --bind "left:reload($nav_left)+transform-header($hdr_cmd)" \
-        --bind "right:reload($nav_right)+transform-header($hdr_cmd)" \
+        --bind "left:reload($nav_cmd)+transform-header($hdr_left)" \
+        --bind "right:reload($nav_cmd)+transform-header($hdr_right)" \
         --bind "tab:toggle-preview" \
         --bind "ctrl-r:execute(echo open > $ACTION_FILE)+accept" \
         --expect="ctrl-r" \
