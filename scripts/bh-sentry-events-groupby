@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# ── bh-sentry-events-groupby ──────────────────────────────────────────────────
+# Sentry Discover/Events API로 임의 필드 group by 집계.
+# Issues 화면 Events 탭에는 group by가 없어 CLI로 조회할 때 사용.
+#
+# 인증: ~/.cursor/mcp.json (sentry-selfhosted-mcp) — 수동 export 불필요
+#
+# 사용법:
+#   bh-sentry-events-groupby -h
+#   bh-sentry-events-groupby -g user.id -q 'issue.id:44750 project:kitties-game-mw'
+#   bh-sentry-events-groupby -g feature -q 'project:kitties-game-mw feature:in_app_ad'
+#   bh-sentry-events-groupby -g trace_step -q 'project:kitties-game-mw feature:in_app_ad' -t 7d
+#   bh-sentry-events-groupby -g user.id -q '...' --raw   # JSON 원문
+#
+# 환경변수 (선택):
+#   SENTRY_PROJECT_SLUG   기본 query에 project:slug 사용 (예: kitties-game-mw)
+#   PROJECT               API project 파라미터 (default: 4)
+#   STATS_PERIOD          기간 (default: 14d)
+#
+# 참고:
+#   - query에 project:slug 포함 권장 (project=4 파라미터만으로는 API 거부될 수 있음)
+#   - numeric issue 필터는 issue.id:44750 형식 (issue:44750 은 self-hosted에서 실패)
+# ──────────────────────────────────────────────────────────────────────────────
+
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+bh-sentry-events-groupby — Sentry Events API group by
+
+Usage:
+  bh-sentry-events-groupby -g FIELD [options]
+
+Required:
+  -g, --group FIELD     groupBy 필드
+                        예: user.id, feature, trace_step, issue.id
+
+Options:
+  -q, --query QUERY     Sentry query
+                        (default: project:${SENTRY_PROJECT_SLUG} 또는 project:${PROJECT})
+  -p, --project ID      API project id (default: 4, kitties-game-mw)
+  -t, --period PERIOD   statsPeriod (default: 14d)
+  -s, --sort SORT       sort (default: -count())
+      --raw             JSON 원문 출력
+  -h, --help            이 도움말
+
+Examples:
+  bh-sentry-events-groupby -g user.id \
+    -q 'issue.id:44750 project:kitties-game-mw'
+
+  bh-sentry-events-groupby -g feature \
+    -q 'project:kitties-game-mw feature:in_app_ad'
+
+  bh-sentry-events-groupby -g trace_step \
+    -q 'project:kitties-game-mw feature:in_app_ad' -t 7d
+
+  SENTRY_PROJECT_SLUG=app-search \
+    bh-sentry-events-groupby -g user.id -q 'level:error'
+EOF
+}
+
+# -h/--help는 lib 로드·API 호출 전에 처리
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help) usage; exit 0 ;;
+  esac
+done
+
+LIB="$(dirname "$0")/bh-sentry-events-lib.sh"
+# shellcheck source=/dev/null
+source "$LIB"
+
+GROUP_BY=""
+PROJECT="${PROJECT:-4}"
+PROJECT_SLUG="${SENTRY_PROJECT_SLUG:-}"
+STATS_PERIOD="${STATS_PERIOD:-14d}"
+QUERY="${QUERY:-}"
+SORT="${SORT:--count()}"
+RAW=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -g|--group)
+      [[ $# -ge 2 ]] || { echo "Error: -g requires FIELD" >&2; usage >&2; exit 1; }
+      GROUP_BY="$2"; shift 2
+      ;;
+    -p|--project)
+      [[ $# -ge 2 ]] || { echo "Error: -p requires ID" >&2; usage >&2; exit 1; }
+      PROJECT="$2"; shift 2
+      ;;
+    -q|--query)
+      [[ $# -ge 2 ]] || { echo "Error: -q requires QUERY" >&2; usage >&2; exit 1; }
+      QUERY="$2"; shift 2
+      ;;
+    -t|--period)
+      [[ $# -ge 2 ]] || { echo "Error: -t requires PERIOD" >&2; usage >&2; exit 1; }
+      STATS_PERIOD="$2"; shift 2
+      ;;
+    -s|--sort)
+      [[ $# -ge 2 ]] || { echo "Error: -s requires SORT" >&2; usage >&2; exit 1; }
+      SORT="$2"; shift 2
+      ;;
+    --raw) RAW=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *)
+      echo "Error: unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ -z "$GROUP_BY" ]]; then
+  echo "Error: -g/--group FIELD is required." >&2
+  usage >&2
+  exit 1
+fi
+
+bh_sentry_load_mcp
+
+if [[ -z "$QUERY" ]]; then
+  if [[ -n "$PROJECT_SLUG" ]]; then
+    QUERY="project:${PROJECT_SLUG}"
+  else
+    QUERY="project:${PROJECT}"
+  fi
+fi
+
+bh_sentry_events_groupby "$GROUP_BY" "$QUERY" "$PROJECT" "$STATS_PERIOD" "$SORT" "$RAW"

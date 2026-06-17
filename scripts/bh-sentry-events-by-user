@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# ── bh-sentry-events-by-user ──────────────────────────────────────────────────
+# Sentry 이벤트를 user.id 기준으로 group by 집계.
+# 이슈별 "어떤 유저가 몇 번" 봤는지 확인할 때 사용.
+#
+# 인증: ~/.cursor/mcp.json (sentry-selfhosted-mcp)
+#
+# 사용법:
+#   bh-sentry-events-by-user -h
+#   bh-sentry-events-by-user                          # issue 44750, kitties-game-mw
+#   bh-sentry-events-by-user -i 44750                 # numeric → issue.id:44750
+#   bh-sentry-events-by-user -i KITTIES-GAME-MW-4P    # shortId → issue:SHORT
+#   bh-sentry-events-by-user -q 'project:kitties-game-mw feature:in_app_ad'
+#   bh-sentry-events-by-user -t 7d --raw
+#
+# 환경변수 (선택):
+#   SENTRY_PROJECT_SLUG   project slug (default: kitties-game-mw)
+#   ISSUE                 기본 이슈 id (default: 44750)
+#   PROJECT               API project id (default: 4)
+#   STATS_PERIOD          기간 (default: 14d)
+#
+# 내부: bh-sentry-events-groupby -g user.id
+# ──────────────────────────────────────────────────────────────────────────────
+
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+bh-sentry-events-by-user — Sentry Events user.id group by
+
+Usage:
+  bh-sentry-events-by-user [options]
+
+Options:
+  -i, --issue ID        이슈 필터 (default: 44750)
+                        숫자 → issue.id:N, shortId → issue:SHORT
+  -p, --project ID      API project id (default: 4)
+  -q, --query QUERY     query 전체 지정 (-q 사용 시 -i 무시)
+  -t, --period PERIOD   statsPeriod (default: 14d)
+      --raw             JSON 원문
+  -h, --help            이 도움말
+
+Examples:
+  bh-sentry-events-by-user
+  bh-sentry-events-by-user -i 44750
+  bh-sentry-events-by-user -i KITTIES-GAME-MW-4P
+  bh-sentry-events-by-user -q 'project:kitties-game-mw feature:in_app_ad'
+  bh-sentry-events-by-user -q 'issue.id:44750 project:kitties-game-mw' -t 7d
+
+환경변수: SENTRY_PROJECT_SLUG (default: kitties-game-mw)
+EOF
+}
+
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help) usage; exit 0 ;;
+  esac
+done
+
+ISSUE="${ISSUE:-44750}"
+PROJECT="${PROJECT:-4}"
+PROJECT_SLUG="${SENTRY_PROJECT_SLUG:-kitties-game-mw}"
+STATS_PERIOD="${STATS_PERIOD:-14d}"
+QUERY=""
+RAW=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -i|--issue)
+      [[ $# -ge 2 ]] || { echo "Error: -i requires ID" >&2; usage >&2; exit 1; }
+      ISSUE="$2"; shift 2
+      ;;
+    -p|--project)
+      [[ $# -ge 2 ]] || { echo "Error: -p requires ID" >&2; usage >&2; exit 1; }
+      PROJECT="$2"; shift 2
+      ;;
+    -q|--query)
+      [[ $# -ge 2 ]] || { echo "Error: -q requires QUERY" >&2; usage >&2; exit 1; }
+      QUERY="$2"; shift 2
+      ;;
+    -t|--period)
+      [[ $# -ge 2 ]] || { echo "Error: -t requires PERIOD" >&2; usage >&2; exit 1; }
+      STATS_PERIOD="$2"; shift 2
+      ;;
+    --raw) RAW=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *)
+      echo "Error: unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ -z "$QUERY" ]]; then
+  if [[ "$ISSUE" =~ ^[0-9]+$ ]]; then
+    QUERY="issue.id:${ISSUE} project:${PROJECT_SLUG}"
+  else
+    QUERY="issue:${ISSUE} project:${PROJECT_SLUG}"
+  fi
+fi
+
+CMD=(
+  "$(dirname "$0")/bh-sentry-events-groupby"
+  -g user.id
+  -q "$QUERY"
+  -p "$PROJECT"
+  -t "$STATS_PERIOD"
+)
+
+if [[ "$RAW" -eq 1 ]]; then
+  CMD+=(--raw)
+fi
+
+exec "${CMD[@]}"

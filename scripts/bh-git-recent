@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# 최근 작업한 브랜치를 fzf로 선택해서 체크아웃한다
+LIMIT=${1:-20}
+
+if ! command -v fzf &>/dev/null; then
+  # fzf 없으면 그냥 목록 출력
+  echo "최근 브랜치 (상위 ${LIMIT}개):"
+  git branch --sort=-committerdate --format='%(refname:short) — %(committerdate:relative)' | head -"$LIMIT"
+  exit 0
+fi
+
+BRANCH=$(git branch --sort=-committerdate --format='%(refname:short) — %(committerdate:relative)' \
+  | head -"$LIMIT" \
+  | fzf --prompt="브랜치 선택 > " --height=40% --reverse \
+  | awk '{print $1}')
+
+if [ -n "$BRANCH" ]; then
+  git checkout "$BRANCH"
+fi

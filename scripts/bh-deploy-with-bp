@@ -1,0 +1,768 @@
+#!/usr/bin/env bash
+
+# ── bh-deploy-with-bp ─────────────────────────────────────────────────────────
+# 현재 디렉토리의 git 레포를 기반으로 Bitbucket 파이프라인(prod 제외)을 대화형으로 실행.
+# 선택 가능 파이프라인: dev, alp (custom)
+# ──────────────────────────────────────────────────────────────────────────────
+
+set -euo pipefail
+
+# ── 색상 정의 ──────────────────────────────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+DIM='\033[2m'
+RESET='\033[0m'
+
+# ── 유틸 함수 ──────────────────────────────────────────────────────────────────
+info()    { echo -e "${CYAN}▶${RESET} $*"; }
+success() { echo -e "${GREEN}✔${RESET} $*"; }
+warn()    { echo -e "${YELLOW}⚠${RESET}  $*"; }
+error()   { echo -e "${RED}✖${RESET}  $*" >&2; }
+die()     { error "$*"; exit 1; }
+
+# ── Bitbucket 인증 정보 로드 ──────────────────────────────────────────────────
+# 파이프라인 트리거 API는 Bearer 단독 불가 → Basic Auth(email:token) 필요
+# 우선순위: 환경변수 > ~/.cursor/mcp.json
+_load_token() {
+  local mcp_config="$HOME/.cursor/mcp.json"
+
+  if [[ -z "${BB_EMAIL:-}" || -z "${BB_TOKEN:-}" ]]; then
+    if [[ -f "$mcp_config" ]]; then
+      local mcp_vals
+      mcp_vals=$(python3 -c "
+import json, sys
+with open('$mcp_config') as f:
+    d = json.load(f)
+env = d.get('mcpServers',{}).get('11st-bitbucket-mcp',{}).get('env',{})
+print(env.get('BITBUCKET_EMAIL',''))
+print(env.get('BITBUCKET_BEARER_TOKEN',''))
+" 2>/dev/null || true)
+      BB_EMAIL="${BITBUCKET_EMAIL:-$(echo "$mcp_vals" | sed -n '1p')}"
+      BB_TOKEN="${BITBUCKET_BEARER_TOKEN:-$(echo "$mcp_vals" | sed -n '2p')}"
+    fi
+  fi
+
+  if [[ -z "${BB_EMAIL:-}" || -z "${BB_TOKEN:-}" ]]; then
+    die "Bitbucket 인증 정보가 없습니다. ~/.cursor/mcp.json의 BITBUCKET_EMAIL / BITBUCKET_BEARER_TOKEN을 확인하세요."
+  fi
+  export BB_EMAIL BB_TOKEN
+}
+
+# ── git 레포 정보 추출 ────────────────────────────────────────────────────────
+_get_repo_info() {
+  if ! git rev-parse --is-inside-work-tree &>/dev/null; then
+    die "현재 디렉토리는 git 레포가 아닙니다."
+  fi
+
+  CURRENT_BRANCH=$(git branch --show-current 2>/dev/null)
+  if [[ -z "$CURRENT_BRANCH" ]]; then
+    die "현재 브랜치를 감지할 수 없습니다 (detached HEAD 상태일 수 있습니다)."
+  fi
+
+  # 모든 remote 중 bitbucket.org URL만 수집
+  local bb_remotes=()
+  while IFS='|' read -r remote_name remote_url; do
+    local parsed
+    parsed=$(python3 -c "
+import re, sys
+url = sys.argv[1]
+m = re.search(r'bitbucket\.org[:/]([^/:]+)/([^/.]+?)(?:\.git)?\$', url)
+if m:
+    print(m.group(1) + '/' + m.group(2))
+" "$remote_url" 2>/dev/null || true)
+    if [[ -n "$parsed" ]]; then
+      bb_remotes+=("${remote_name}  →  ${parsed}")
+    fi
+  done < <(git remote -v 2>/dev/null | awk '/(fetch)/{print $1"|"$2}')
+
+  if [[ ${#bb_remotes[@]} -eq 0 ]]; then
+    die "Bitbucket remote를 찾을 수 없습니다. git remote -v를 확인하세요."
+  fi
+
+  local selected_remote
+  if [[ "${AGENT_MODE:-0}" == "1" || ${#bb_remotes[@]} -eq 1 ]]; then
+    # --agent 모드 또는 remote가 1개면 자동 선택
+    selected_remote="${bb_remotes[0]}"
+  else
+    # bitbucket remote가 여러 개면 fzf로 선택
+    _select_item "배포할 Bitbucket 레포를 선택하세요:" "${bb_remotes[@]}"
+    selected_remote="$SELECTED"
+  fi
+
+  # "remote-name  →  workspace/repo" 에서 workspace/repo 추출
+  local repo_path
+  repo_path=$(echo "$selected_remote" | sed 's/.*→  *//')
+  BB_WORKSPACE="${repo_path%%/*}"
+  BB_REPO="${repo_path#*/}"
+
+  export CURRENT_BRANCH BB_WORKSPACE BB_REPO
+}
+
+# ── Bitbucket API 호출 헬퍼 (Basic Auth: email:token) ────────────────────────
+_bb_api_post() {
+  local endpoint="$1"
+  local body="$2"
+  local response http_code
+  response=$(curl -s -w "\n__HTTP_STATUS__%{http_code}" \
+    -X POST \
+    -u "${BB_EMAIL}:${BB_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "$body" \
+    "https://api.bitbucket.org/2.0/${endpoint}" 2>&1)
+  http_code=$(echo "$response" | grep -o '__HTTP_STATUS__[0-9]*' | grep -o '[0-9]*')
+  local body_only="${response%__HTTP_STATUS__*}"
+  if [[ "$http_code" -lt 200 || "$http_code" -ge 300 ]] 2>/dev/null; then
+    error "API 응답 (HTTP ${http_code}): ${body_only}"
+    return 1
+  fi
+  echo "$body_only"
+}
+
+_bb_api_get() {
+  local endpoint="$1"
+  curl -sf \
+    -u "${BB_EMAIL}:${BB_TOKEN}" \
+    "https://api.bitbucket.org/2.0/${endpoint}"
+}
+
+# ── 마지막 배포 시간 조회 ────────────────────────────────────────────────────
+# $1: pipeline_name
+# Bitbucket API는 파이프라인 실행 시 variables를 목록 응답에 포함하지 않으므로
+# pipeline name 일치하는 가장 최근 실행을 조회한다.
+_get_last_deploy_time() {
+  local pipeline_name="$1"
+
+  local response
+  response=$(_bb_api_get \
+    "repositories/${BB_WORKSPACE}/${BB_REPO}/pipelines/?sort=-created_on&pagelen=50" \
+    2>/dev/null) || { echo "조회 실패"; return; }
+
+  python3 -c "
+import json, sys
+from datetime import datetime
+
+try:
+    data = json.loads(sys.argv[1])
+except Exception:
+    print('조회 실패')
+    sys.exit(0)
+
+pipeline_name = sys.argv[2]
+
+target = None
+for p in data.get('values', []):
+    sel = p.get('target', {}).get('selector', {})
+    if sel.get('type') != 'custom':
+        continue
+    if sel.get('pattern') != pipeline_name:
+        continue
+    created = p.get('created_on', '')
+    if not created:
+        continue
+    target = p
+    break
+
+if target is None:
+    print('이력 없음')
+    sys.exit(0)
+
+created_str = target.get('created_on', '')
+state       = target.get('state', {}).get('name', '')
+build_num   = target.get('build_number', '')
+
+try:
+    dt = datetime.fromisoformat(created_str.replace('Z', '+00:00'))
+    local_dt = dt.astimezone()
+    time_str = local_dt.strftime('%Y-%m-%d %H:%M:%S %Z')
+except Exception:
+    time_str = created_str
+
+icons = {'COMPLETED': '✔', 'FAILED': '✖', 'IN_PROGRESS': '⟳', 'STOPPED': '⏹'}
+icon = icons.get(state, '?')
+print(f'{icon} #{build_num}  {time_str}  ({state})')
+" "$response" "$pipeline_name"
+}
+
+# ── bitbucket-pipelines.yml에서 custom 파이프라인 파싱 ────────────────────────
+# 구조: pipelines(indent=0) > custom(indent=2) > 파이프라인명(indent=4)
+_parse_pipelines() {
+  local pipelines_file
+  pipelines_file=$(git rev-parse --show-toplevel)/bitbucket-pipelines.yml
+  if [[ ! -f "$pipelines_file" ]]; then
+    die "bitbucket-pipelines.yml 파일을 찾을 수 없습니다: $pipelines_file"
+  fi
+
+  AVAILABLE_PIPELINES=()
+
+  local parse_script
+  parse_script=$(cat << 'PYEOF'
+import sys, re
+f = sys.argv[1]
+in_pipelines = in_custom = False
+result = []
+for line in open(f):
+    line = line.rstrip()
+    if not line or line.lstrip().startswith('#'):
+        continue
+    indent = len(line) - len(line.lstrip())
+    s = line.lstrip()
+    if indent == 0:
+        in_pipelines = (s == 'pipelines:')
+        in_custom = False
+        continue
+    if not in_pipelines:
+        continue
+    if indent == 2:
+        in_custom = (s == 'custom:')
+        continue
+    if not in_custom:
+        continue
+    if indent == 4:
+        m = re.match(r'^([a-zA-Z0-9_-]+):', s)
+        if m and 'prod' not in m.group(1):
+            result.append(m.group(1))
+print('\n'.join(result))
+PYEOF
+)
+
+  while IFS= read -r name; do
+    [[ -n "$name" ]] && AVAILABLE_PIPELINES+=("$name")
+  done < <(python3 -c "$parse_script" "$pipelines_file")
+
+  export AVAILABLE_PIPELINES
+}
+
+# ── custom 파이프라인의 변수 정의 파싱 ─────────────────────────────────────
+# $1: 파이프라인 이름 (선택, 없으면 첫 번째 select-entry 앵커만 파싱)
+# 반환: PIPELINE_VARS (JSON 배열 문자열)
+#   형식: [{"name":"entry","default":"common","allowed":["common","events",...]}, ...]
+_parse_pipeline_variables() {
+  local pipeline_name="${1:-}"
+  local pipelines_file
+  pipelines_file=$(git rev-parse --show-toplevel)/bitbucket-pipelines.yml
+
+  PIPELINE_VARS="[]"
+
+  PIPELINE_VARS=$(python3 - "$pipelines_file" "$pipeline_name" << 'PYEOF'
+import sys, re, json
+
+f            = sys.argv[1]
+target_pipe  = sys.argv[2]  # 파이프라인 이름 (없으면 "")
+
+lines = open(f).readlines()
+
+# 1단계: definitions 섹션에서 앵커명 → variables 매핑 수집
+#   definitions(indent=0) > anchor-name(indent=2) > variables(indent=4)
+anchors = {}   # anchor_name -> [{"name":..,"default":..,"allowed":[..]}]
+
+in_definitions = False
+cur_anchor = None
+in_vars = in_allowed = False
+cur_name = cur_default = ""
+cur_allowed = []
+
+def flush_var():
+    if cur_anchor and cur_name:
+        anchors.setdefault(cur_anchor, []).append(
+            {"name": cur_name, "default": cur_default, "allowed": list(cur_allowed)}
+        )
+
+for line in lines:
+    line = line.rstrip()
+    if not line:
+        continue
+    indent = len(line) - len(line.lstrip())
+    s = line.lstrip()
+
+    if indent == 0:
+        in_definitions = (s == 'definitions:')
+        if not in_definitions:
+            cur_anchor = None
+            in_vars = in_allowed = False
+        continue
+    if not in_definitions:
+        continue
+    if indent == 2:
+        flush_var()
+        cur_anchor = None
+        in_vars = in_allowed = False
+        cur_name = cur_default = ""
+        cur_allowed = []
+        m = re.match(r'([a-zA-Z0-9_-]+)\s*:.*&([a-zA-Z0-9_-]+)', s)
+        if m:
+            cur_anchor = m.group(2)
+        continue
+    if cur_anchor is None:
+        continue
+    if indent == 4 and s == 'variables:':
+        in_vars = True
+        continue
+    if not in_vars:
+        continue
+
+    m_name = re.match(r'-\s+name:\s+(.+)', s)
+    if m_name:
+        flush_var()
+        cur_name = m_name.group(1).strip()
+        cur_default = ""
+        cur_allowed = []
+        in_allowed = False
+        continue
+    m_default = re.match(r'default:\s+(.+)', s)
+    if m_default:
+        cur_default = m_default.group(1).strip()
+        continue
+    if s == 'allowed-values:':
+        in_allowed = True
+        continue
+    if in_allowed and s.startswith('- '):
+        cur_allowed.append(s[2:].strip())
+    elif in_allowed and not s.startswith('-'):
+        in_allowed = False
+
+flush_var()
+
+# 2단계: 파이프라인 이름이 주어졌으면 해당 파이프라인이 참조하는 앵커 찾기
+#   pipelines(0) > custom(2) > pipeline-name(4) > <<: *anchor(6)
+target_anchor = None
+if target_pipe:
+    in_pipelines = in_custom = in_target = False
+    for line in lines:
+        line = line.rstrip()
+        if not line or line.lstrip().startswith('#'):
+            continue
+        indent = len(line) - len(line.lstrip())
+        s = line.lstrip()
+        if indent == 0:
+            in_pipelines = (s == 'pipelines:')
+            in_custom = in_target = False
+            continue
+        if not in_pipelines:
+            continue
+        if indent == 2:
+            in_custom = (s == 'custom:')
+            in_target = False
+            continue
+        if not in_custom:
+            continue
+        if indent == 4:
+            in_target = bool(re.match(rf'^{re.escape(target_pipe)}\s*:', s))
+            continue
+        if in_target and indent >= 6:
+            m = re.search(r'<<:\s*\*([a-zA-Z0-9_-]+)', s)
+            if m:
+                target_anchor = m.group(1)
+                break
+
+# 3단계: 결과 결정
+#   - 파이프라인 앵커 찾았으면 그것만 사용
+#   - 못 찾았으면 'select-entry' 앵커 (기본 fallback)
+if target_anchor and target_anchor in anchors:
+    result = anchors[target_anchor]
+elif 'select-entry' in anchors:
+    result = anchors['select-entry']
+else:
+    result = []
+
+print(json.dumps(result, ensure_ascii=False))
+PYEOF
+)
+  export PIPELINE_VARS
+}
+
+# ── 대화형 선택 (fzf 화살표 키) ──────────────────────────────────────────────
+_select_item() {
+  local prompt="$1"
+  shift
+  local items=("$@")
+
+  local result
+  result=$(printf '%s\n' "${items[@]}" \
+    | fzf --prompt="  ${prompt} > " \
+          --height=~40% \
+          --layout=reverse \
+          --border=rounded \
+          --border-label=" Bitbucket Pipeline Launcher " \
+          --border-label-pos=top \
+          --info=hidden \
+          --no-sort \
+          --color='border:#5BCEFA,label:#5BCEFA,prompt:#FFFFFF,pointer:#F5A623,hl:#F5A623,hl+:#F5A623' \
+          2>/dev/null) || { warn "선택이 취소되었습니다."; exit 0; }
+
+  SELECTED="$result"
+}
+
+# ── 파이프라인 실행 ────────────────────────────────────────────────────────────
+# $1: pipeline_name, $2: branch
+# $3: primary var name (entry), $4: primary var value
+# $5: extra_vars_json  (JSON array: [{"key":"bump_type","value":"minor"}, ...])
+_run_pipeline_with_vars() {
+  local pipeline_name="$1"
+  local branch="$2"
+  local var_name="${3:-}"
+  local var_value="${4:-}"
+  local extra_vars_json="${5:-[]}"
+
+  info "파이프라인 실행 요청 중..."
+  echo -e "  ${DIM}워크스페이스 : ${BB_WORKSPACE}${RESET}"
+  echo -e "  ${DIM}레포지토리   : ${BB_REPO}${RESET}"
+  echo -e "  ${DIM}브랜치       : ${branch}${RESET}"
+  echo -e "  ${DIM}파이프라인   : ${pipeline_name}${RESET}"
+  if [[ -n "$var_name" && -n "$var_value" ]]; then
+    echo -e "  ${DIM}변수         : ${var_name}=${var_value}${RESET}"
+  fi
+  # extra vars 출력
+  python3 -c "
+import json, sys
+extra = json.loads(sys.argv[1])
+for v in extra:
+    print(f\"  \033[2m변수         : {v['key']}={v['value']}\033[0m\")
+" "$extra_vars_json" 2>/dev/null || true
+  echo ""
+
+  if [[ "${AGENT_MODE:-0}" != "1" ]]; then
+    # 마지막 배포 이력 조회
+    local last_deploy
+    last_deploy=$(_get_last_deploy_time "$pipeline_name" "$var_value" 2>/dev/null || echo "조회 실패")
+    echo -e "  ${DIM}마지막 배포   : ${last_deploy}${RESET}"
+    echo ""
+
+    printf "위 설정으로 파이프라인을 실행합니다. [Enter: 실행 / ESC: 취소] "
+    local key
+    while IFS= read -r -s -n1 key; do
+      if [[ "$key" == "" ]]; then
+        echo ""
+        break
+      elif [[ "$key" == $'\033' ]]; then
+        echo ""
+        warn "취소되었습니다."
+        exit 0
+      fi
+    done
+  fi
+
+  local payload
+  payload=$(python3 -c "
+import json, sys
+branch     = sys.argv[1]
+pipeline   = sys.argv[2]
+var_name   = sys.argv[3]
+var_value  = sys.argv[4]
+extra_vars = json.loads(sys.argv[5])
+
+body = {
+    'target': {
+        'type': 'pipeline_ref_target',
+        'ref_type': 'branch',
+        'ref_name': branch,
+        'selector': {
+            'type': 'custom',
+            'pattern': pipeline
+        }
+    }
+}
+
+variables = []
+if var_name and var_value:
+    variables.append({'key': var_name, 'value': var_value})
+variables.extend(extra_vars)
+
+if variables:
+    body['variables'] = variables
+
+print(json.dumps(body))
+" "$branch" "$pipeline_name" "${var_name}" "${var_value}" "$extra_vars_json")
+
+  local response
+  response=$(_bb_api_post \
+    "repositories/${BB_WORKSPACE}/${BB_REPO}/pipelines/" \
+    "$payload") || die "파이프라인 실행 API 호출 실패. 토큰 또는 권한을 확인하세요."
+
+  local pipeline_uuid build_number
+  pipeline_uuid=$(echo "$response" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('uuid','').strip('{}'))" 2>/dev/null || echo "")
+  build_number=$(echo "$response" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('build_number',''))" 2>/dev/null || echo "")
+
+  echo ""
+  success "파이프라인이 실행되었습니다!"
+  if [[ -n "$build_number" ]]; then
+    echo -e "  ${BOLD}빌드 번호 : #${build_number}${RESET}"
+  fi
+  if [[ -n "$pipeline_uuid" ]]; then
+    echo -e "  ${BOLD}파이프라인 URL${RESET} : https://bitbucket.org/${BB_WORKSPACE}/${BB_REPO}/pipelines/results/${build_number:-$pipeline_uuid}"
+  fi
+  echo ""
+}
+
+# ── --agent 모드: 질문 목록 JSON 출력 ────────────────────────────────────────
+# 에이전트가 이 출력을 파싱하여 사용자에게 질문을 한 번에 구성한 뒤,
+# 답변을 모아 --agent branch=X pipeline=Y entry=Z1,Z2 bump_type=minor 형태로 재실행한다.
+_agent_questions() {
+  _parse_pipelines
+
+  local branches=()
+  branches+=("$CURRENT_BRANCH")
+  while IFS='|' read -r refname author _reldate; do
+    local bname="${refname#origin/}"
+    [[ "$bname" == *"HEAD"* || "$bname" == "$CURRENT_BRANCH" || "$bname" == "origin" || -z "$bname" ]] && continue
+    branches+=("$bname")
+  done < <(git for-each-ref \
+    --sort=-committerdate \
+    --format='%(refname:short)|%(authorname)|%(committerdate:relative)' \
+    refs/remotes/origin/ 2>/dev/null)
+
+  _parse_pipeline_variables
+
+  python3 - <<PYEOF
+import json, sys
+
+repo      = "${BB_WORKSPACE}/${BB_REPO}"
+current   = "${CURRENT_BRANCH}"
+branches  = $(python3 -c "import json,sys; print(json.dumps('${branches[*]}'.split()))")
+pipelines = $(python3 -c "import json,sys; print(json.dumps('${AVAILABLE_PIPELINES[*]}'.split()))")
+pipe_vars = json.loads(r"""${PIPELINE_VARS}""")
+
+questions = [
+    {
+        "key":      "branch",
+        "prompt":   "배포할 브랜치",
+        "default":  current,
+        "options":  branches,
+        "multi":    False
+    },
+    {
+        "key":      "pipeline",
+        "prompt":   "파이프라인",
+        "options":  pipelines,
+        "multi":    False
+    }
+]
+
+for v in pipe_vars:
+    # entry 변수는 복수 선택 허용, 나머지는 단일 선택
+    is_entry = (v["name"] == "entry")
+    questions.append({
+        "key":      v["name"],
+        "prompt":   f"{v['name']}" + (" (복수 선택 가능, 쉼표 구분)" if is_entry else ""),
+        "default":  v["default"],
+        "options":  v["allowed"],
+        "multi":    is_entry
+    })
+
+print(json.dumps({"repo": repo, "questions": questions}, ensure_ascii=False, indent=2))
+PYEOF
+}
+
+# ── --agent branch=X pipeline=Y [entry=Z1,Z2,...] [bump_type=minor] 모드 ──────
+# entry가 복수(쉼표 구분)이면 각 값마다 파이프라인을 순차 트리거한다.
+_agent_run() {
+  local branch="" pipeline=""
+  declare -A extra_vars   # 변수명 → 값 맵
+
+  for arg in "$@"; do
+    case "$arg" in
+      branch=*)   branch="${arg#branch=}" ;;
+      pipeline=*) pipeline="${arg#pipeline=}" ;;
+      *=*)
+        local key="${arg%%=*}"
+        local val="${arg#*=}"
+        if [[ -n "${extra_vars[$key]:-}" && "${extra_vars[$key]}" != "$val" ]]; then
+          warn "중복 변수 무시: ${key}=${val} (기존값 ${extra_vars[$key]} 유지)"
+        else
+          extra_vars["$key"]="$val"
+        fi
+        ;;
+    esac
+  done
+
+  [[ -z "$branch" ]]   && die "--agent 모드: branch= 가 필요합니다."
+  [[ -z "$pipeline" ]] && die "--agent 모드: pipeline= 가 필요합니다."
+
+  _parse_pipeline_variables "$pipeline"
+
+  # entry 변수 값 (복수 쉼표 구분 가능)
+  local entry_value="${extra_vars[entry]:-}"
+
+  # extra_vars를 key=value 쌍으로 JSON 배열로 구성 (entry 제외)
+  local extra_json_vars="[]"
+  local extra_list=()
+  for k in "${!extra_vars[@]}"; do
+    [[ "$k" == "entry" ]] && continue
+    [[ -z "${extra_vars[$k]}" ]] && continue
+    extra_list+=("{\"key\":\"${k}\",\"value\":\"${extra_vars[$k]}\"}")
+  done
+  if [[ ${#extra_list[@]} -gt 0 ]]; then
+    extra_json_vars="[$(IFS=,; echo "${extra_list[*]}")]"
+  fi
+
+  # 쉼표로 구분된 복수 entry 처리
+  IFS=',' read -ra entries <<< "${entry_value:-}"
+
+  # entries가 비어있으면 entry 없이 단일 실행
+  if [[ -z "${entry_value}" ]]; then
+    _run_pipeline_with_vars "$pipeline" "$branch" "" "" "$extra_json_vars"
+    return
+  fi
+
+  if [[ ${#entries[@]} -le 1 ]]; then
+    _run_pipeline_with_vars "$pipeline" "$branch" "entry" "${entries[0]:-}" "$extra_json_vars"
+  else
+    echo -e "${BOLD}${CYAN}▶ ${#entries[@]}개 entry 병렬 실행 시작${RESET}"
+    echo ""
+    local pids=() labels=()
+    for entry in "${entries[@]}"; do
+      entry="${entry// /}"
+      [[ -z "$entry" ]] && continue
+      (
+        _run_pipeline_with_vars "$pipeline" "$branch" "entry" "$entry" "$extra_json_vars"
+      ) &
+      pids+=($!)
+      labels+=("$entry")
+    done
+
+    local idx=0
+    for pid in "${pids[@]}"; do
+      wait "$pid"
+      local status=$?
+      if [[ $status -eq 0 ]]; then
+        success "entry=${labels[$idx]} 완료"
+      else
+        error "entry=${labels[$idx]} 실패 (exit $status)"
+      fi
+      (( idx++ )) || true
+    done
+  fi
+}
+
+# ── 메인 ──────────────────────────────────────────────────────────────────────
+main() {
+  # --agent 단독: 질문 목록 JSON 출력
+  if [[ "${1:-}" == "--agent" && $# -eq 1 ]]; then
+    AGENT_MODE=1
+    _load_token
+    _get_repo_info
+    _agent_questions
+    return 0
+  fi
+
+  # --agent key=val ...: 답변을 받아 바로 실행
+  if [[ "${1:-}" == "--agent" && $# -gt 1 ]]; then
+    AGENT_MODE=1
+    _load_token
+    _get_repo_info
+    shift
+    _agent_run "$@"
+    return 0
+  fi
+
+  echo ""
+  echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════╗${RESET}"
+  echo -e "${BOLD}${CYAN}║     Bitbucket Pipeline Launcher          ║${RESET}"
+  echo -e "${BOLD}${CYAN}╚══════════════════════════════════════════╝${RESET}"
+  echo ""
+
+  _load_token
+  _get_repo_info
+  _parse_pipelines
+
+  info "레포 감지: ${BOLD}${BB_WORKSPACE}/${BB_REPO}${RESET}  |  현재 브랜치: ${BOLD}${CURRENT_BRANCH}${RESET}"
+
+  # ── 1. 브랜치 선택 ──
+  # 정렬 기준: 현재 브랜치 → 내 커밋 브랜치(★, 최근순) → 다른 브랜치(최근순)
+  # authorname에서 내 이름 추출: "김병호(Byungho Kim)/팀/11ST" → "김병호"
+  local my_short_name
+  my_short_name=$(git config user.name 2>/dev/null \
+    | python3 -c "import sys; n=sys.stdin.read().strip(); print(n.split('(')[0].strip())" 2>/dev/null || echo "")
+
+  local branch_list=()
+  branch_list+=("★ ${CURRENT_BRANCH}  [현재 브랜치]")
+
+  local my_branches=() other_branches=()
+  while IFS='|' read -r refname author reldate; do
+    local bname="${refname#origin/}"
+    # HEAD, 현재 브랜치, "origin" 단독 항목 제외
+    [[ "$bname" == *"HEAD"* || "$bname" == "$CURRENT_BRANCH" || "$bname" == "origin" || -z "$bname" ]] && continue
+    local label="${bname}  [${reldate}]"
+    if [[ -n "$my_short_name" && "$author" == *"${my_short_name}"* ]]; then
+      my_branches+=("★ ${label}")
+    else
+      other_branches+=("  ${label}")
+    fi
+  done < <(git for-each-ref \
+    --sort=-committerdate \
+    --format='%(refname:short)|%(authorname)|%(committerdate:relative)' \
+    refs/remotes/origin/ 2>/dev/null)
+
+  branch_list+=("${my_branches[@]}" "${other_branches[@]}")
+
+  _select_item "브랜치를 선택하세요 (★ = 내 브랜치):" "${branch_list[@]}"
+  local selected_branch="$SELECTED"
+  # "★ " 또는 "  " prefix 제거 후 "  [...]" suffix 제거
+  selected_branch=$(echo "$selected_branch" \
+    | sed 's/^★ //; s/^  //' \
+    | sed 's/  \[.*\]$//')
+
+  # ── 2. 파이프라인 선택 ──
+  if [[ ${#AVAILABLE_PIPELINES[@]} -eq 0 ]]; then
+    die "실행 가능한 파이프라인이 없습니다 (prod 제외)."
+  fi
+
+  _select_item "파이프라인을 선택하세요:" "${AVAILABLE_PIPELINES[@]}"
+  local selected_pipeline="$SELECTED"
+
+  # ── 3. 변수 선택 (파이프라인 변수별 순서대로 선택) ──
+  _parse_pipeline_variables "$selected_pipeline"
+
+  local selected_entry="" extra_vars_json="[]"
+  local extra_vars_list=()
+
+  # 변수 개수 확인
+  local var_count
+  var_count=$(python3 -c "import json,sys; print(len(json.loads(sys.argv[1])))" "$PIPELINE_VARS")
+
+  if [[ "$var_count" -gt 0 ]]; then
+    # 각 변수마다 별도 fzf 선택
+    local collected_vars_json="[]"
+    while IFS= read -r var_json; do
+      local vname vdefault vallowed_json
+      vname=$(echo "$var_json" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d['name'])")
+      vdefault=$(echo "$var_json" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(d.get('default',''))")
+      vallowed_json=$(echo "$var_json" | python3 -c "import json,sys; d=json.loads(sys.stdin.read()); print(json.dumps(d.get('allowed',[])))")
+
+      local allowed_count
+      allowed_count=$(python3 -c "import json,sys; print(len(json.loads(sys.argv[1])))" "$vallowed_json")
+      [[ "$allowed_count" -eq 0 ]] && continue
+
+      # allowed 목록 → bash 배열로 변환
+      local ordered_values=()
+      if [[ -n "$vdefault" ]]; then
+        ordered_values+=("${vdefault} (기본값)")
+      fi
+      while IFS= read -r item; do
+        [[ -n "$item" && "$item" != "$vdefault" ]] && ordered_values+=("$item")
+      done < <(python3 -c "import json,sys; [print(v) for v in json.loads(sys.argv[1])]" "$vallowed_json")
+
+      _select_item "${vname} 값을 선택하세요:" "${ordered_values[@]}"
+      local selected_val="${SELECTED% (기본값)}"
+
+      if [[ "$vname" == "entry" ]]; then
+        selected_entry="$selected_val"
+      else
+        extra_vars_list+=("{\"key\":\"${vname}\",\"value\":\"${selected_val}\"}")
+      fi
+    done < <(python3 -c "import json,sys; [print(json.dumps(v)) for v in json.loads(sys.argv[1])]" "$PIPELINE_VARS")
+
+    # extra_vars_json 구성
+    if [[ ${#extra_vars_list[@]} -gt 0 ]]; then
+      extra_vars_json="[$(IFS=,; echo "${extra_vars_list[*]}")]"
+    fi
+  fi
+
+  # ── 4. 실행 ──
+  _run_pipeline_with_vars "$selected_pipeline" "$selected_branch" \
+    "entry" "$selected_entry" "$extra_vars_json"
+}
+
+main "$@"

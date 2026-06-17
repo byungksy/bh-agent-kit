@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# 아침 출근 루틴 — 브랜치 현황, 티켓, 복습, 브랜치 정리
+
+BOLD='\033[1m'
+CYAN='\033[0;36m'
+YELLOW='\033[0;33m'
+RESET='\033[0m'
+
+divider() {
+  echo ""
+  echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+  echo -e "${BOLD}$1${RESET}"
+  echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+}
+
+echo ""
+echo -e "${BOLD}☀️  Good morning, BH. $(date '+%Y-%m-%d %A')${RESET}"
+
+# 1. 최근 TIL 복습
+divider "📖 최근 TIL"
+tail -10 ~/.til.md 2>/dev/null || echo "(기록 없음)"
+
+# 2. 오늘 세션 티켓 조회
+divider "🎫 최근 세션 언급 티켓 (상위 10개)"
+bh-today-tickets 2>/dev/null | head -12
+
+# 3. 최근 브랜치 목록
+divider "🌿 최근 작업 브랜치"
+git branch --sort=-committerdate --format='  %(refname:short)  —  %(committerdate:relative)' 2>/dev/null | head -8 \
+  || echo "  (git 레포 아님 — cd 프로젝트 후 실행하세요)"
+
+# 4. merged 브랜치 정리 여부 확인
+divider "🧹 merged 브랜치 정리"
+MERGED=$(git branch --merged 2>/dev/null | grep -vE "^\*|^\s*(main|master|develop|dev)$")
+if [ -z "$MERGED" ]; then
+  echo "  정리할 브랜치 없음 ✅"
+else
+  echo -e "${YELLOW}  정리 가능한 브랜치:${RESET}"
+  echo "$MERGED" | sed 's/^/  /'
+  echo ""
+  echo -n "  지금 삭제할까요? (y/N) "
+  read -r answer
+  if [[ "$answer" =~ ^[Yy]$ ]]; then
+    echo "$MERGED" | xargs git branch -d
+    echo "  삭제 완료 ✅"
+  fi
+fi
+
+echo ""
+echo -e "${BOLD}🚀 오늘도 화이팅!${RESET}"
+echo ""

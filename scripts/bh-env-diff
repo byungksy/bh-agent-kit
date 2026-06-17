@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# .env.example에 있는 키 중 .env에 누락된 것을 찾는다
+EXAMPLE="${1:-.env.example}"
+ACTUAL="${2:-.env}"
+
+if [ ! -f "$EXAMPLE" ]; then
+  echo "파일 없음: $EXAMPLE"
+  exit 1
+fi
+if [ ! -f "$ACTUAL" ]; then
+  echo "파일 없음: $ACTUAL"
+  exit 1
+fi
+
+MISSING=$(comm -23 \
+  <(grep -oE '^[A-Z_][A-Z0-9_]*' "$EXAMPLE" | sort) \
+  <(grep -oE '^[A-Z_][A-Z0-9_]*' "$ACTUAL"  | sort))
+
+if [ -z "$MISSING" ]; then
+  echo "누락된 키 없음 — .env가 최신 상태입니다."
+else
+  echo "⚠️  .env에 누락된 키:"
+  echo "$MISSING" | sed 's/^/  /'
+fi

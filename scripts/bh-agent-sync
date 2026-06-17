@@ -1,0 +1,9 @@
+#!/bin/bash
+# bh-agent-sync — 에이전트 스킬 및 룰 전체 동기화 실행
+set -euo pipefail
+
+AGENTS_HOME="${AGENTS_HOME:-$HOME/.agents}"
+SYNC_SCRIPT="${AGENTS_HOME}/scripts/sync-to-agents.sh"
+
+echo "🔄 에이전트(Cursor, Claude, Gemini/agy) 스킬 & 룰 전체 동기화 중..."
+"$SYNC_SCRIPT" --full

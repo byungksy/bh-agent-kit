@@ -1,0 +1,9 @@
+#!/bin/bash
+
+if [ -z "$1" ] || [ -z "$2" ]; then
+  echo "사용법: bh-git-clone <레포명> <디렉토리명>"
+  echo "예시:  bh-git-clone pdp-front-mobile my-project"
+  exit 1
+fi
+
+git clone "git@bitbucket.org:11st/$1.git" "$2"

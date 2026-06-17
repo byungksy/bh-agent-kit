@@ -1,0 +1,374 @@
+#!/bin/bash
+# bh-token-usage — Cursor 토큰 사용량 조회
+#
+# Usage:
+#   bh-token-usage                        # 오늘 전체 요약
+#   bh-token-usage --session              # 오늘 세션별 목록
+#   bh-token-usage --session <ID>         # 특정 세션 상세 (턴별 + 합계)
+#   bh-token-usage --session last         # 가장 최근 세션 상세
+#   bh-token-usage --ticket <TICKET-ID>   # 티켓별 전체 기간 집계
+#   bh-token-usage --date <YYYY-MM-DD>    # 특정 날짜 요약
+#   bh-token-usage --skill <skill-name>   # 스킬 관여 집계
+#   bh-token-usage --week                 # 이번 주 일별 합계
+
+LOG_DIR="$HOME/token-usage"
+TODAY=$(date '+%Y-%m-%d')
+
+# ── 숫자 포맷: 1000 단위 콤마 ──────────────────────────────
+fmt() { printf "%'d" "$1" 2>/dev/null || echo "$1"; }
+
+# ── 구/신버전 호환 jq 필드 추출 ────────────────────────────
+# input/output/cache_read/cache_write 를 일관되게 읽는 jq 표현식
+JQ_COMPAT='
+  def get_input:   (.tokens.input   // .usage.inputTokens   // 0);
+  def get_output:  (.tokens.output  // .usage.outputTokens  // 0);
+  def get_cr:      (.tokens.cache_read  // .usage.cacheReadTokens  // 0);
+  def get_cw:      (.tokens.cache_write // .usage.cacheWriteTokens // 0);
+  def get_ticket:  (.ticket // "NO-TICKET");
+  def get_skills:  (.skills // []);
+'
+
+# ── 인수 파싱 ───────────────────────────────────────────────
+MODE="today"
+ARG=""
+
+case "$1" in
+  --session) MODE="session"; ARG="${2:-list}" ;;
+  --ticket)  MODE="ticket";  ARG="$2" ;;
+  --date)    MODE="date";    ARG="$2" ;;
+  --skill)   MODE="skill";   ARG="$2" ;;
+  --week)    MODE="week" ;;
+  --help|-h)
+    sed -n '3,12p' "$0" | sed 's/^# //'
+    exit 0 ;;
+esac
+
+# ── 세션 상세 출력 함수 ─────────────────────────────────────
+print_session_detail() {
+  local session_id="$1"
+  local log_file="$2"
+
+  local rows
+  rows=$(jq -r --arg sid "$session_id" \
+    "${JQ_COMPAT}"'
+    select(.session == $sid) |
+    [.timestamp,
+     get_input,  get_output,
+     get_cr,     get_cw,
+     (get_skills | if length > 0 then join(",") else "-" end)
+    ] | @tsv
+  ' "$log_file" 2>/dev/null)
+
+  if [ -z "$rows" ]; then
+    echo "  세션 '$session_id' 기록 없음"
+    return
+  fi
+
+  echo "  세션: $session_id"
+  echo ""
+  printf "  %-19s %12s %8s %12s %12s  %s\n" \
+    "시각" "Input" "Output" "Cache Read" "Cache Write" "스킬"
+  printf "  %s\n" "$(printf '%.0s─' {1..90})"
+
+  local total_input=0 total_output=0 total_cr=0 total_cw=0
+
+  while IFS=$'\t' read -r ts inp out cr cw skills; do
+    printf "  %-19s %12s %8s %12s %12s  %s\n" \
+      "$ts" "$(fmt $inp)" "$(fmt $out)" "$(fmt $cr)" "$(fmt $cw)" "$skills"
+    total_input=$((total_input + inp))
+    total_output=$((total_output + out))
+    total_cr=$((total_cr + cr))
+    total_cw=$((total_cw + cw))
+  done <<< "$rows"
+
+  local effective_input=$((total_cw))  # cache_write만 실제 신규 처리
+  local cache_ratio=0
+  [ "$total_input" -gt 0 ] && cache_ratio=$(( total_cr * 100 / total_input ))
+
+  printf "  %s\n" "$(printf '%.0s─' {1..90})"
+  printf "  %-19s %12s %8s %12s %12s\n" \
+    "세션 합계" "$(fmt $total_input)" "$(fmt $total_output)" "$(fmt $total_cr)" "$(fmt $total_cw)"
+  echo ""
+  echo "  Cache Hit Rate : ${cache_ratio}%  (Input 중 Cache Read 비율)"
+  echo "  실효 신규 Input : $(fmt $effective_input) tokens  (Cache Write = 실제 처리량)"
+}
+
+# ══════════════════════════════════════════════════════════════
+# MODE: today — 오늘 전체 요약
+# ══════════════════════════════════════════════════════════════
+if [ "$MODE" = "today" ]; then
+  SESSION_LOG="$LOG_DIR/session-${TODAY}.jsonl"
+  echo "════════════════════════════════════════════"
+  echo "  Token Usage — $TODAY"
+  echo "════════════════════════════════════════════"
+  echo ""
+
+  if [ ! -f "$SESSION_LOG" ]; then
+    echo "  로그 없음: $SESSION_LOG"
+    exit 0
+  fi
+
+  total=$(wc -l < "$SESSION_LOG" | tr -d ' ')
+  echo "  총 응답: ${total}건"
+  echo ""
+
+  echo "[세션별 요약]"
+  printf "  %-36s %6s %12s %8s  %s\n" "세션 ID" "응답수" "Input" "Output" "스킬"
+  printf "  %s\n" "$(printf '%.0s─' {1..85})"
+
+  jq -rs "${JQ_COMPAT}"'
+    group_by(.session)[] |
+    {
+      session: .[0].session,
+      count:   length,
+      input:   ([.[] | get_input]  | add),
+      output:  ([.[] | get_output] | add),
+      skills:  ([.[] | get_skills[]] | unique | if length > 0 then join(",") else "-" end)
+    }
+  ' "$SESSION_LOG" 2>/dev/null | \
+  jq -r '[.session, .count, .input, .output, .skills] | @tsv' | \
+  while IFS=$'\t' read -r sid cnt inp out skills; do
+    printf "  %-36s %6s %12s %8s  %s\n" \
+      "$sid" "$cnt" "$(fmt $inp)" "$(fmt $out)" "$skills"
+  done
+
+  echo ""
+  echo "[하루 전체 합계]"
+  jq -rs "${JQ_COMPAT}"'
+    {
+      input:   ([.[] | get_input]  | add // 0),
+      output:  ([.[] | get_output] | add // 0),
+      cache_r: ([.[] | get_cr]     | add // 0),
+      cache_w: ([.[] | get_cw]     | add // 0)
+    }
+  ' "$SESSION_LOG" 2>/dev/null | \
+  jq -r '"  Input:        \(.input)\n  Output:       \(.output)\n  Cache Read:   \(.cache_r)\n  Cache Write:  \(.cache_w)\n  ─────────────────────────────\n  Total I/O:    \(.input + .output)\n  Cache Hit:    \(if .input > 0 then (.cache_r * 100 / .input | floor | tostring) + "%" else "n/a" end)"' 2>/dev/null
+
+  echo ""
+  echo "  힌트: bh-token-usage --session last   # 최근 세션 턴별 상세"
+  echo "════════════════════════════════════════════"
+  exit 0
+fi
+
+# ══════════════════════════════════════════════════════════════
+# MODE: session — 세션 상세
+# ══════════════════════════════════════════════════════════════
+if [ "$MODE" = "session" ]; then
+  SESSION_LOG="$LOG_DIR/session-${TODAY}.jsonl"
+
+  if [ ! -f "$SESSION_LOG" ]; then
+    echo "로그 없음: $SESSION_LOG"
+    exit 0
+  fi
+
+  # --session (인수 없음 or list) → fzf 인터랙티브 목록
+  if [ "$ARG" = "list" ]; then
+    # 세션별 메타 추출
+    session_meta=$(jq -rs '
+      group_by(.session)[] |
+      {
+        session:    .[0].session,
+        count:      length,
+        first:      (.[0].timestamp[11:16]),
+        last:       (.[-1].timestamp[11:16]),
+        input:      ([.[] | (.tokens.input  // .usage.inputTokens  // 0)] | add // 0),
+        output:     ([.[] | (.tokens.output // .usage.outputTokens // 0)] | add // 0),
+        skills:     ([.[] | (.skills // [])[]] | unique | if length > 0 then join(",") else "-" end),
+        transcript: ([ .[] | select(.transcript != null and .transcript != "") | .transcript ] | first // "")
+      } |
+      [.session, .count, .first, .last, .input, .output, .skills, .transcript] | @tsv
+    ' "$SESSION_LOG" 2>/dev/null)
+
+    # 각 세션의 첫 user_query 추출해서 표시용 라인 생성
+    session_lines=""
+    while IFS=$'\t' read -r sid cnt first last inp out skills tpath; do
+      preview=""
+      if [ -n "$tpath" ] && [ -f "$tpath" ]; then
+        preview=$(jq -r 'select(.role == "user") | .message.content[] | select(.type == "text") | .text' \
+          "$tpath" 2>/dev/null | \
+          python3 -c "
+import sys, re
+text = sys.stdin.read()
+m = re.search(r'<user_query>\s*(.*?)\s*</user_query>', text, re.DOTALL)
+print((m.group(1) if m else text).strip().splitlines()[0][:50] if (m or text.strip()) else '')
+" 2>/dev/null)
+      fi
+      [ -z "$preview" ] && preview="(대화 내용 없음)"
+      session_lines+="${first}~${last} ${cnt}건 │ ${preview} │ In:${inp} │ ${sid}"$'\n'
+    done <<< "$session_meta"
+
+    if [ -z "$session_lines" ]; then
+      echo "세션 없음: $SESSION_LOG"
+      exit 0
+    fi
+
+    # fzf로 선택 → 세션 ID 추출 → 상세 출력
+    selected=$(echo "$session_lines" | fzf \
+      --prompt="세션 선택 > " \
+      --header="$TODAY  ↑↓: 이동  Enter: 턴별 상세  Esc: 종료" \
+      --height=60% --layout=reverse --border \
+      --preview='
+        sid=$(echo {} | grep -oE "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+        tpath=$(jq -r --arg s "$sid" "select(.session == \$s and .transcript != null and .transcript != \"\") | .transcript" '"$SESSION_LOG"' 2>/dev/null | head -1)
+        echo "── 발화 목록 ──────────────────────────────"
+        if [ -n "$tpath" ] && [ -f "$tpath" ]; then
+          jq -r "select(.role == \"user\") | .message.content[] | select(.type == \"text\") | .text" "$tpath" 2>/dev/null | \
+            python3 -c "
+import sys, re
+text = sys.stdin.read()
+for i, m in enumerate(re.findall(r\"<user_query>\s*(.*?)\s*</user_query>\", text, re.DOTALL)):
+    print(f\"[{i+1}] {m.strip().splitlines()[0][:60]}\")
+"
+        else
+          echo "(transcript 없음)"
+        fi
+        echo ""
+        echo "── 턴별 토큰 ──────────────────────────────"
+        jq -r --arg s "$sid" "select(.session == \$s) | [.timestamp[11:], (.tokens.input // .usage.inputTokens // 0), (.tokens.output // .usage.outputTokens // 0), (.tokens.cache_read // .usage.cacheReadTokens // 0)] | @tsv" '"$SESSION_LOG"' 2>/dev/null | \
+          awk "{printf \"%-8s  In:%-10s Out:%-8s CR:%s\n\", \$1, \$2, \$3, \$4}"
+      ' \
+      --preview-window=right:55%:wrap)
+
+    [ -z "$selected" ] && exit 0
+
+    # 선택한 줄에서 UUID 추출
+    ARG=$(echo "$selected" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+    [ -z "$ARG" ] && exit 0
+    echo ""
+  fi
+
+  # --session last → 오늘 가장 최근 세션
+  if [ "$ARG" = "last" ]; then
+    ARG=$(jq -r '.session' "$SESSION_LOG" 2>/dev/null | tail -1)
+  fi
+
+  echo "════════════════════════════════════════════"
+  echo "  Session Detail"
+  echo "════════════════════════════════════════════"
+  echo ""
+  print_session_detail "$ARG" "$SESSION_LOG"
+  echo "════════════════════════════════════════════"
+  exit 0
+fi
+
+# ══════════════════════════════════════════════════════════════
+# MODE: ticket — 티켓별 전체 기간 집계
+# ══════════════════════════════════════════════════════════════
+if [ "$MODE" = "ticket" ]; then
+  if [ -z "$ARG" ]; then
+    echo "Usage: bh-token-usage --ticket <TICKET-ID>"
+    exit 1
+  fi
+
+  echo "════════════════════════════════════════════"
+  echo "  Token Usage — Ticket: $ARG"
+  echo "════════════════════════════════════════════"
+  echo ""
+
+  all_logs=("$LOG_DIR"/session-*.jsonl)
+  matched=$(cat "${all_logs[@]}" 2>/dev/null | \
+    jq -c "${JQ_COMPAT}select(get_ticket == \"$ARG\")" 2>/dev/null)
+  count=$(echo "$matched" | grep -c '^{' 2>/dev/null || echo 0)
+
+  if [ "$count" -eq 0 ]; then
+    echo "  '$ARG' 기록 없음"
+    exit 0
+  fi
+
+  first_ts=$(echo "$matched" | jq -r '.timestamp' | sort | head -1)
+  last_ts=$(echo  "$matched" | jq -r '.timestamp' | sort | tail -1)
+  echo "  기간: $first_ts ~ $last_ts  (${count}건)"
+  echo ""
+
+  echo "[날짜별 집계]"
+  echo "$matched" | jq -rs "${JQ_COMPAT}"'
+    group_by(.timestamp[:10])[] |
+    {date:   .[0].timestamp[:10],
+     count:  length,
+     input:  ([.[] | get_input]  | add // 0),
+     output: ([.[] | get_output] | add // 0),
+     cr:     ([.[] | get_cr]     | add // 0)
+    } |
+    "  \(.date)  \(.count)건  In:\(.input)  Out:\(.output)  CR:\(.cr)"
+  ' 2>/dev/null
+
+  echo ""
+  echo "[관여 스킬]"
+  echo "$matched" | jq -r "${JQ_COMPAT}get_skills[]" 2>/dev/null | \
+    sort | uniq -c | sort -rn | awk '{printf "  %-30s %s건\n", $2, $1}'
+
+  echo ""
+  echo "[전체 합계]"
+  echo "$matched" | jq -rs "${JQ_COMPAT}"'
+    {
+      input:  ([.[] | get_input]  | add // 0),
+      output: ([.[] | get_output] | add // 0),
+      cr:     ([.[] | get_cr]     | add // 0),
+      cw:     ([.[] | get_cw]     | add // 0)
+    } |
+    "  Input:  \(.input)  Output: \(.output)  Cache R/W: \(.cr)/\(.cw)",
+    "  Total I/O: \(.input + .output)  Cache Hit: \(if .input > 0 then (.cr * 100 / .input | floor | tostring) + "%" else "n/a" end)"
+  ' 2>/dev/null
+  echo "════════════════════════════════════════════"
+  exit 0
+fi
+
+# ══════════════════════════════════════════════════════════════
+# MODE: date — 특정 날짜 요약
+# ══════════════════════════════════════════════════════════════
+if [ "$MODE" = "date" ]; then
+  if [ -z "$ARG" ]; then
+    echo "Usage: bh-token-usage --date YYYY-MM-DD"
+    exit 1
+  fi
+  # token-report.sh에 위임
+  exec bash "$HOME/.cursor/hooks/token-report.sh" "$ARG"
+fi
+
+# ══════════════════════════════════════════════════════════════
+# MODE: skill — 스킬 관여 집계
+# ══════════════════════════════════════════════════════════════
+if [ "$MODE" = "skill" ]; then
+  if [ -z "$ARG" ]; then
+    echo "Usage: bh-token-usage --skill <skill-name>"
+    exit 1
+  fi
+  exec bash "$HOME/.cursor/hooks/token-report.sh" --skill "$ARG"
+fi
+
+# ══════════════════════════════════════════════════════════════
+# MODE: week — 이번 주 일별 합계
+# ══════════════════════════════════════════════════════════════
+if [ "$MODE" = "week" ]; then
+  echo "════════════════════════════════════════════"
+  echo "  Token Usage — This Week"
+  echo "════════════════════════════════════════════"
+  printf "  %-12s %6s %14s %8s %14s  %s\n" \
+    "날짜" "응답" "Input" "Output" "Cache Read" "Hit%"
+  printf "  %s\n" "$(printf '%.0s─' {1..75})"
+
+  for i in 6 5 4 3 2 1 0; do
+    d=$(date -v-${i}d '+%Y-%m-%d' 2>/dev/null || date -d "-${i} days" '+%Y-%m-%d' 2>/dev/null)
+    log="$LOG_DIR/session-${d}.jsonl"
+    if [ -f "$log" ]; then
+      jq -rs "${JQ_COMPAT}"'
+        {
+          count:  length,
+          input:  ([.[] | get_input]  | add // 0),
+          output: ([.[] | get_output] | add // 0),
+          cr:     ([.[] | get_cr]     | add // 0)
+        } | [.count, .input, .output, .cr,
+             (if .input > 0 then (.cr * 100 / .input | floor) else 0 end)
+            ] | @tsv
+      ' "$log" 2>/dev/null | \
+      while IFS=$'\t' read -r cnt inp out cr hit; do
+        printf "  %-12s %6s %14s %8s %14s  %s%%\n" \
+          "$d" "$cnt" "$(fmt $inp)" "$(fmt $out)" "$(fmt $cr)" "$hit"
+      done
+    else
+      printf "  %-12s %6s\n" "$d" "-"
+    fi
+  done
+  echo "════════════════════════════════════════════"
+  exit 0
+fi

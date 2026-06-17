@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+"""두 JSON 파일을 의미 기반으로 diff한다."""
+import json, sys
+
+if len(sys.argv) != 3:
+    print("사용법: bh-json-diff <file1.json> <file2.json>")
+    sys.exit(1)
+
+def load(path):
+    with open(path) as f:
+        return json.load(f)
+
+def diff(a, b, path=""):
+    if type(a) != type(b):
+        print(f"  타입 변경  {path}: {type(a).__name__} → {type(b).__name__}")
+        return
+    if isinstance(a, dict):
+        for k in set(a) | set(b):
+            p = f"{path}.{k}" if path else k
+            if k not in a:
+                print(f"  추가됨    {p}: {b[k]!r}")
+            elif k not in b:
+                print(f"  삭제됨    {p}: {a[k]!r}")
+            else:
+                diff(a[k], b[k], p)
+    elif isinstance(a, list):
+        if a != b:
+            print(f"  배열 변경  {path}: {len(a)}개 → {len(b)}개")
+    else:
+        if a != b:
+            print(f"  값 변경    {path}: {a!r} → {b!r}")
+
+try:
+    a, b = load(sys.argv[1]), load(sys.argv[2])
+    result = []
+    import io
+    from contextlib import redirect_stdout
+    f = io.StringIO()
+    with redirect_stdout(f):
+        diff(a, b)
+    output = f.getvalue()
+    if output:
+        print(f"--- {sys.argv[1]}")
+        print(f"+++ {sys.argv[2]}")
+        print(output.rstrip())
+    else:
+        print("차이 없음")
+except Exception as e:
+    print(f"오류: {e}")
+    sys.exit(1)

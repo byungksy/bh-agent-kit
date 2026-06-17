@@ -1,0 +1,70 @@
+#!/bin/bash
+
+# bh-git-merge <브랜치1> [브랜치2]
+#
+# 브랜치2가 있을 때: 브랜치2로 체크아웃한 뒤 브랜치1을 머지
+# 브랜치1만 있을 때: 현재 체크아웃된 브랜치에 브랜치1을 머지
+
+set -e
+
+if [ -z "$1" ]; then
+  echo "사용법: bh-git-merge <머지할 브랜치> [대상 브랜치]"
+  echo ""
+  echo "  인수 1개: 현재 브랜치에 <머지할 브랜치>를 머지"
+  echo "  인수 2개: <대상 브랜치>로 이동 후 <머지할 브랜치>를 머지"
+  echo ""
+  echo "예시:"
+  echo "  bh-git-merge feature/my-branch          # 현재 브랜치에 머지"
+  echo "  bh-git-merge feature/my-branch develop  # develop에 feature/my-branch 머지"
+  exit 1
+fi
+
+SOURCE_BRANCH="$1"
+TARGET_BRANCH="$2"
+
+# 현재 브랜치 저장
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
+# 브랜치 존재 여부 확인 (로컬 + 리모트)
+branch_exists() {
+  local branch="$1"
+  git show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null \
+    || git show-ref --verify --quiet "refs/remotes/origin/$branch" 2>/dev/null
+}
+
+if ! branch_exists "$SOURCE_BRANCH"; then
+  echo "오류: 브랜치 '$SOURCE_BRANCH' 를 찾을 수 없습니다. (로컬/리모트 모두 없음)"
+  exit 1
+fi
+
+if [ -n "$TARGET_BRANCH" ] && ! branch_exists "$TARGET_BRANCH"; then
+  echo "오류: 브랜치 '$TARGET_BRANCH' 를 찾을 수 없습니다. (로컬/리모트 모두 없음)"
+  exit 1
+fi
+
+# 대상 브랜치 결정
+if [ -z "$TARGET_BRANCH" ]; then
+  TARGET_BRANCH="$CURRENT_BRANCH"
+fi
+
+echo "머지 계획:"
+echo "  소스: $SOURCE_BRANCH"
+echo "  대상: $TARGET_BRANCH"
+echo ""
+
+# 대상 브랜치로 이동 (현재 브랜치와 다를 때만)
+if [ "$CURRENT_BRANCH" != "$TARGET_BRANCH" ]; then
+  echo "→ '$TARGET_BRANCH' 로 체크아웃..."
+  git checkout "$TARGET_BRANCH"
+fi
+
+# 대상 브랜치 최신화
+echo "→ '$TARGET_BRANCH' 최신화 (git pull)..."
+git pull origin "$TARGET_BRANCH" 2>/dev/null || echo "  (리모트 없음, 로컬 상태 유지)"
+
+# 머지 실행
+echo "→ '$SOURCE_BRANCH' 를 '$TARGET_BRANCH' 에 머지..."
+git merge "$SOURCE_BRANCH"
+
+echo ""
+echo "완료: '$SOURCE_BRANCH' → '$TARGET_BRANCH' 머지 성공"

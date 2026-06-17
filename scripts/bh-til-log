@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# TIL idle 리마인더 발송 이력 조회
+LOG_FILE="$HOME/.agents/logs/til-idle-check.log"
+
+if [ ! -f "$LOG_FILE" ]; then
+  echo "로그 없음: $LOG_FILE"
+  exit 1
+fi
+
+# 인자 없음: 전체 출력
+if [ $# -eq 0 ]; then
+  cat "$LOG_FILE"
+  exit 0
+fi
+
+# today: 오늘 것만
+if [ "${1:-}" = "today" ]; then
+  TODAY=$(date '+%Y-%m-%d')
+  grep "$TODAY" "$LOG_FILE" || echo "(오늘 발송 이력 없음)"
+  exit 0
+fi
+
+# 숫자: 최근 N줄
+if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+  tail -"$1" "$LOG_FILE"
+  exit 0
+fi
+
+echo "사용법: bh-til-log [today | N]"

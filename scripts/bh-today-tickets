@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""오늘 Cursor 세션에서 언급된 Jira 티켓 ID를 조회한다."""
+
+import json, os, glob, re, sys
+from datetime import datetime, date
+from collections import Counter
+
+TARGET_DATE = sys.argv[1] if len(sys.argv) > 1 else date.today().isoformat()
+TRANSCRIPTS_ROOT = os.path.expanduser("~/.cursor/projects")
+TICKET_PATTERN = re.compile(r'\b([A-Z][A-Z0-9]+-\d+)\b')
+EXCLUDE = {'UTC', 'PR', 'OK', 'ID', 'UI', 'AI', 'CI', 'API', 'CSS', 'URL',
+           'DNS', 'TCP', 'HTTP', 'HTTPS', 'CD', 'PDP', 'FE', 'BE', 'KR'}
+
+today_files = []
+for fpath in glob.glob(TRANSCRIPTS_ROOT + '/**/*.jsonl', recursive=True):
+    if not os.path.isfile(fpath):
+        continue
+    try:
+        mtime = datetime.fromtimestamp(os.path.getmtime(fpath)).date().isoformat()
+        if mtime == TARGET_DATE:
+            today_files.append(fpath)
+    except:
+        pass
+
+ticket_counter = Counter()
+
+for fpath in today_files:
+    try:
+        with open(fpath, 'r', errors='ignore') as f:
+            for line in f:
+                try:
+                    obj = json.loads(line.strip())
+                    msg = obj.get('message', {})
+                    if isinstance(msg, dict):
+                        content = msg.get('content', [])
+                        if isinstance(content, list):
+                            for item in content:
+                                if isinstance(item, dict) and item.get('type') == 'text':
+                                    for m in TICKET_PATTERN.findall(item.get('text', '')):
+                                        if m not in EXCLUDE:
+                                            ticket_counter[m] += 1
+                except:
+                    pass
+    except:
+        pass
+
+print(f"=== {TARGET_DATE} 세션에서 언급된 티켓 ({len(today_files)}개 세션) ===")
+for ticket, count in sorted(ticket_counter.items(), key=lambda x: -x[1]):
+    print(f"  {ticket:<20} ({count}회)")

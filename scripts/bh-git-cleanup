@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# merged 브랜치를 일괄 삭제한다 (main, master, develop, 현재 브랜치 제외)
+DEFAULT_BRANCHES="main|master|develop|dev"
+CURRENT=$(git branch --show-current 2>/dev/null)
+
+if [ -z "$CURRENT" ]; then
+  echo "git 레포지토리가 아닙니다."
+  exit 1
+fi
+
+MERGED=$(git branch --merged | grep -vE "^\*|^\s*(${DEFAULT_BRANCHES}|${CURRENT})$")
+
+if [ -z "$MERGED" ]; then
+  echo "삭제할 merged 브랜치가 없습니다."
+  exit 0
+fi
+
+echo "삭제될 브랜치 목록:"
+echo "$MERGED"
+echo ""
+echo -n "삭제할까요? (y/N) "
+read -r answer
+if [[ "$answer" =~ ^[Yy]$ ]]; then
+  echo "$MERGED" | xargs git branch -d
+  echo "삭제 완료"
+else
+  echo "취소됨"
+fi

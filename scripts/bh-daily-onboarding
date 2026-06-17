@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# 오늘 배운 도구/개념을 복습용 문서로 열어준다
+ONBOARDING_FILE="${ONBOARDING_FILE:-$HOME/.bh-onboarding.md}"
+
+# 파일이 없으면 최초 생성
+if [ ! -f "$ONBOARDING_FILE" ]; then
+  echo "파일 생성: $ONBOARDING_FILE"
+fi
+
+# 에디터로 열기 (기본: bat으로 보기, EDITOR 있으면 편집)
+if [ "$1" = "edit" ]; then
+  ${EDITOR:-vi} "$ONBOARDING_FILE"
+elif command -v bat &>/dev/null; then
+  bat "$ONBOARDING_FILE"
+else
+  cat "$ONBOARDING_FILE"
+fi

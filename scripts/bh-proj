@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# fzf로 프로젝트 디렉토리를 선택해서 이동한다
+SEARCH_ROOTS=(
+  "$HOME/WebstormProjects"
+  "$HOME/Projects"
+  "$HOME/Dev"
+  "$HOME"
+)
+
+if ! command -v fzf &>/dev/null; then
+  echo "fzf가 필요합니다: brew install fzf"
+  exit 1
+fi
+
+DIRS=()
+for root in "${SEARCH_ROOTS[@]}"; do
+  if [ -d "$root" ]; then
+    while IFS= read -r d; do
+      DIRS+=("$d")
+    done < <(find "$root" -maxdepth 2 -name ".git" -type d 2>/dev/null | sed 's|/.git||')
+  fi
+done
+
+SELECTED=$(printf '%s\n' "${DIRS[@]}" | sort -u | fzf --prompt="프로젝트 선택 > " --height=50% --reverse)
+
+if [ -n "$SELECTED" ]; then
+  echo "cd $SELECTED"
+  cd "$SELECTED" || exit 1
+  # 새 셸로 열기 (현재 셸에서 이동하려면 alias bh-proj='source ~/bin/bh-proj' 설정 필요)
+  exec "$SHELL"
+fi

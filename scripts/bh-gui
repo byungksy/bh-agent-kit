@@ -1,0 +1,5 @@
+#!/bin/bash
+# BH Workspace Script Console Launcher
+# 이 스크립트를 실행하면 Hammerspoon을 통해 GUI 관리 대시보드가 열립니다.
+
+open -g "hammerspoon://bh-gui"

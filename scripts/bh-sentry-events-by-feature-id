@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# ── bh-sentry-events-by-feature-id ────────────────────────────────────────────
+# Sentry 이벤트를 feature 태그 기준으로 group by 집계.
+# 코드에서 setTag('feature', 'in_app_ad') 등으로 붙인 태그별 건수 확인.
+#
+# 인증: ~/.cursor/mcp.json (sentry-selfhosted-mcp)
+#
+# 사용법:
+#   bh-sentry-events-by-feature-id -h
+#   bh-sentry-events-by-feature-id
+#   bh-sentry-events-by-feature-id -q 'project:kitties-game-mw feature:in_app_ad'
+#   bh-sentry-events-by-feature-id -q 'issue.id:44750 project:kitties-game-mw'
+#   bh-sentry-events-by-feature-id -t 7d --raw
+#
+# 환경변수 (선택):
+#   SENTRY_PROJECT_SLUG   project slug (default: kitties-game-mw)
+#   PROJECT               API project id (default: 4)
+#   STATS_PERIOD          기간 (default: 14d)
+#
+# 내부: bh-sentry-events-groupby -g feature
+# ──────────────────────────────────────────────────────────────────────────────
+
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+bh-sentry-events-by-feature-id — Sentry Events feature 태그 group by
+
+Usage:
+  bh-sentry-events-by-feature-id [options]
+
+Options:
+  -p, --project ID      API project id (default: 4)
+  -q, --query QUERY     Sentry query (default: project:kitties-game-mw)
+  -t, --period PERIOD   statsPeriod (default: 14d)
+      --raw             JSON 원문
+  -h, --help            이 도움말
+
+Examples:
+  bh-sentry-events-by-feature-id
+  bh-sentry-events-by-feature-id -q 'project:kitties-game-mw feature:in_app_ad'
+  bh-sentry-events-by-feature-id -q 'issue.id:44750 project:kitties-game-mw'
+  bh-sentry-events-by-feature-id -t 7d
+
+환경변수: SENTRY_PROJECT_SLUG (default: kitties-game-mw)
+EOF
+}
+
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help) usage; exit 0 ;;
+  esac
+done
+
+PROJECT="${PROJECT:-4}"
+PROJECT_SLUG="${SENTRY_PROJECT_SLUG:-kitties-game-mw}"
+STATS_PERIOD="${STATS_PERIOD:-14d}"
+QUERY=""
+RAW=0
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -p|--project)
+      [[ $# -ge 2 ]] || { echo "Error: -p requires ID" >&2; usage >&2; exit 1; }
+      PROJECT="$2"; shift 2
+      ;;
+    -q|--query)
+      [[ $# -ge 2 ]] || { echo "Error: -q requires QUERY" >&2; usage >&2; exit 1; }
+      QUERY="$2"; shift 2
+      ;;
+    -t|--period)
+      [[ $# -ge 2 ]] || { echo "Error: -t requires PERIOD" >&2; usage >&2; exit 1; }
+      STATS_PERIOD="$2"; shift 2
+      ;;
+    --raw) RAW=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *)
+      echo "Error: unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ -z "$QUERY" ]]; then
+  QUERY="project:${PROJECT_SLUG}"
+fi
+
+CMD=(
+  "$(dirname "$0")/bh-sentry-events-groupby"
+  -g feature
+  -q "$QUERY"
+  -p "$PROJECT"
+  -t "$STATS_PERIOD"
+)
+
+if [[ "$RAW" -eq 1 ]]; then
+  CMD+=(--raw)
+fi
+
+exec "${CMD[@]}"

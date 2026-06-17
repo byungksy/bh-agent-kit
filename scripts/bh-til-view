@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# TIL(Today I Learned) 뷰어 & 검색기
+# - 인자 없음: fzf로 날짜 섹션 선택 → 해당 날짜 항목 출력
+# - 인자 있음: 키워드 grep 검색
+#   bh-til-view          → fzf 인터랙티브 뷰어
+#   bh-til-view today    → 오늘 항목만 출력
+#   bh-til-view <keyword> → 키워드 포함 항목 검색
+
+TIL_FILE="${TIL_FILE:-$HOME/.til.md}"
+TODAY=$(date '+%Y-%m-%d')
+
+if [ ! -f "$TIL_FILE" ]; then
+  echo "⚠️  TIL 파일이 없습니다: $TIL_FILE"
+  exit 1
+fi
+
+# today 인자: 오늘 항목만 출력
+if [ "${1:-}" = "today" ]; then
+  echo "=== TIL ($TODAY) ==="
+  awk -v date="$TODAY" '
+    /^## / { in_section = ($0 == "## " date) }
+    in_section && /^- / { print }
+  ' "$TIL_FILE" || echo "(오늘 기록 없음)"
+  exit 0
+fi
+
+# 키워드 검색
+if [ $# -gt 0 ]; then
+  KEYWORD="$*"
+  echo "=== TIL 검색: \"$KEYWORD\" ==="
+  # 날짜 헤더와 함께 매칭 항목 출력
+  awk "
+    /^## [0-9]{4}-[0-9]{2}-[0-9]{2}/ { date = \$0 }
+    /^- / && tolower(\$0) ~ tolower(\"$KEYWORD\") { print date; print \$0; date = \"\" }
+  " "$TIL_FILE" || echo "(결과 없음)"
+  exit 0
+fi
+
+# 인자 없음: fzf 인터랙티브 뷰어
+# 날짜 목록 추출
+DATES=$(grep "^## [0-9]" "$TIL_FILE" | sed 's/^## //' | sort -r)
+
+if [ -z "$DATES" ]; then
+  echo "(TIL 기록이 없습니다)"
+  exit 0
+fi
+
+selected=$(echo "$DATES" \
+  | fzf --ansi \
+        --header="📋 BH TIL Viewer — Enter: 선택, Esc: 취소" \
+        --reverse \
+        --height=40 \
+        --border=rounded \
+        --prompt="날짜 선택 > " \
+        --preview="awk '/^## {}/,/^## [0-9]/' \"$TIL_FILE\" | grep -v '^## ' | bat --style=plain --color=always --language=md" \
+        --preview-window="right:60%:wrap" \
+  2>/tmp/fzf-til-err || true)
+
+if [ -s /tmp/fzf-til-err ]; then
+  echo "⚠️  fzf 오류: $(cat /tmp/fzf-til-err)"
+fi
+
+if [ -n "$selected" ]; then
+  echo "=== TIL ($selected) ==="
+  awk -v date="$selected" '
+    /^## / { in_section = ($0 == "## " date) }
+    in_section && /^- / { print }
+  ' "$TIL_FILE"
+fi

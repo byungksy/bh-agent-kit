@@ -15,7 +15,7 @@ session_suggests_agent_level_up() {
   [ -f "$file" ] || return 1
   # pipefail 환경에서 tail|grep는 매치 시 SIGPIPE(141)로 실패할 수 있음 → process substitution 사용
   /usr/bin/grep -qiE \
-    '~/.agents|agents-config|sync-to-agents|rules-meta\.json|hooks\.json|/agents/|bh-agent-level-up|agent-level-up|grill-me|pr-chaining|룰로 승격|에이전트 룰|스킬.*개선|agents.*승격' \
+    '~/.agents|agents-config|sync-to-agents|rules-meta\.json|hooks\.json|/agents/|bh-agent-level-up|agent-level-up|grill-me|11st-pr-chaining|룰로 승격|에이전트 룰|스킬.*개선|agents.*승격' \
     < <(tail -n 200 "$file" 2>/dev/null)
 }
 

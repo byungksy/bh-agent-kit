@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# 특정 포트를 점유한 프로세스를 종료한다
+PORT=${1:?"사용법: bh-port-kill <포트번호>"}
+
+PIDS=$(lsof -ti :"$PORT" 2>/dev/null)
+if [ -z "$PIDS" ]; then
+  echo "포트 $PORT 를 사용 중인 프로세스가 없습니다."
+  exit 0
+fi
+
+echo "포트 $PORT 점유 프로세스:"
+lsof -i :"$PORT" | grep LISTEN
+echo ""
+echo -n "종료할까요? (y/N) "
+read -r answer
+if [[ "$answer" =~ ^[Yy]$ ]]; then
+  echo "$PIDS" | xargs kill -9
+  echo "종료 완료 (PID: $PIDS)"
+else
+  echo "취소됨"
+fi
