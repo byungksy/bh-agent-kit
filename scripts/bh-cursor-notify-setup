@@ -1,0 +1,43 @@
+#!/bin/bash
+# bh-cursor-notify-setup — Cursor "알려줘" 완료 알림 (Hammerspoon + hooks) 설치
+set -euo pipefail
+
+KIT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+MARKER="bh-agent-kit: cursor-agent-notify"
+HS_INIT="${HOME}/.hammerspoon/init.lua"
+AGENTS_HOOKS="${HOME}/.agents/hooks"
+SNIPPET="${KIT_DIR}/etc/hammerspoon/cursor-agent-notify.snippet.lua"
+
+echo "==> hooks 복사"
+mkdir -p "$AGENTS_HOOKS"
+install -m 755 "${KIT_DIR}/hooks/flag-notify-on-alleoju.sh" "${AGENTS_HOOKS}/"
+install -m 755 "${KIT_DIR}/hooks/notify-on-alleoju.sh" "${AGENTS_HOOKS}/"
+
+echo "==> Hammerspoon init.lua 스니펫"
+mkdir -p "${HOME}/.hammerspoon"
+if [ ! -f "$HS_INIT" ]; then
+  touch "$HS_INIT"
+fi
+
+if grep -qF "$MARKER" "$HS_INIT" 2>/dev/null; then
+  echo "    이미 설치됨 ($MARKER)"
+else
+  {
+    echo ""
+    echo "-- $MARKER"
+    cat "$SNIPPET"
+  } >> "$HS_INIT"
+  echo "    $HS_INIT 에 스니펫 추가됨"
+fi
+
+echo ""
+echo "==> ~/.cursor/hooks.json 수동 병합 필요"
+echo "    beforeSubmitPrompt 에 추가:"
+echo '      { "command": "~/.agents/hooks/flag-notify-on-alleoju.sh", "timeout": 3 }'
+echo "    stop 에 추가 (notify-stop.sh 앞 또는 뒤):"
+echo '      { "command": "~/.agents/hooks/notify-on-alleoju.sh", "timeout": 5 }'
+echo ""
+echo "    참고: ${KIT_DIR}/etc/hooks/cursor-notify.snippet.json"
+echo ""
+echo "==> Hammerspoon → Reload Config 후 테스트:"
+echo '    open -g "hammerspoon://cursor-done?title=테스트&msg=확인&duration=5"'

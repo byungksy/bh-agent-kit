@@ -1,0 +1,11 @@
+{
+  "_comment": "~/.cursor/hooks.json 에 병합할 항목",
+  "beforeSubmitPrompt_append": {
+    "command": "~/.agents/hooks/flag-notify-on-alleoju.sh",
+    "timeout": 3
+  },
+  "stop_append": {
+    "command": "~/.agents/hooks/notify-on-alleoju.sh",
+    "timeout": 5
+  }
+}

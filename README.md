@@ -9,7 +9,9 @@
 | `rules/` | 에이전트에 주입할 룰 본문 (`.md`) |
 | `rules-meta.json` | 룰별 `alwaysApply`·`description` (Cursor frontmatter 생성용) |
 | `skills/` | 온디맨드 스킬 (`*/SKILL.md`) |
+| `hooks/` | Cursor agent 훅 (`beforeSubmitPrompt`, `stop` 등) |
 | `scripts/` | 로컬 `~/bin` 및 `~/.agents/scripts`에서 사용되는 개인용 유틸리티 쉘 스크립트 모음 |
+| `etc/hammerspoon/` | Hammerspoon URL scheme 스니펫 (`cursor-done` 등) |
 | `etc/sources/` | 각 룰·스킬의 출처·참고 링크·내부 통합 메모 |
 
 ## 설치 예시
@@ -20,8 +22,11 @@ cp rules/*.md ~/.agents/rules/
 cp rules-meta.json ~/.agents/rules-meta.json   # 기존 meta와 merge 필요 시 수동 병합
 cp -R skills/* ~/.agents/skills/             # 스킬 추가·갱신
 cp scripts/* ~/.agents/scripts/               # 스크립트 추가·갱신
+cp hooks/*.sh ~/.agents/hooks/               # 훅 추가 (실행 권한 유지)
 bash ~/.agents/scripts/sync-to-agents.sh --full
 ```
+
+Cursor `알려줘` 완료 알림은 `bh-cursor-notify-setup` 한 번으로 hooks + Hammerspoon 스니펫을 설치한다 (`etc/hammerspoon/README.md` 참고).
 
 `00-inquiry-first.md`는 파일명 순으로 Codex `AGENTS.md` 맨 위에 오도록 `00-` 접두어를 유지한다.
 
