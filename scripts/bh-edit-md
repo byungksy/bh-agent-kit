@@ -752,7 +752,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         function insertCodeBlock(lang) {
             const doc = easyMDE.codemirror.getDoc();
             const cursor = doc.getCursor();
-            const template = `\`\`\`${lang}\n\n\`\`\`\n`;
+            const template = '```' + lang + '\n\n```\n';
             doc.replaceRange(template, cursor);
             doc.setCursor({ line: cursor.line + 1, ch: 0 });
             easyMDE.codemirror.focus();
@@ -771,7 +771,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         function showWordCount() {
             const text = easyMDE.value();
             const charCount = text.length;
-            const wordCount = text.trim().split(/\s+/).filter(w => w.length > 0).length;
+            const wordCount = text.trim().split(/\\s+/).filter(w => w.length > 0).length;
             showToast(`Words: ${wordCount} | Characters: ${charCount}`, 'info');
         }
 
