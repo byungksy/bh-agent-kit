@@ -752,7 +752,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         function insertCodeBlock(lang) {
             const doc = easyMDE.codemirror.getDoc();
             const cursor = doc.getCursor();
-            const template = '```' + lang + '\n\n```\n';
+            const template = '```' + lang + '\\n\\n```\\n';
             doc.replaceRange(template, cursor);
             doc.setCursor({ line: cursor.line + 1, ch: 0 });
             easyMDE.codemirror.focus();
@@ -762,7 +762,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         function insertTable() {
             const doc = easyMDE.codemirror.getDoc();
             const cursor = doc.getCursor();
-            const template = "\n| Header 1 | Header 2 |\n| -------- | -------- |\n| Cell 1   | Cell 2   |\n";
+            const template = "\\n| Header 1 | Header 2 |\\n| -------- | -------- |\\n| Cell 1   | Cell 2   |\\n";
             doc.replaceRange(template, cursor);
             easyMDE.codemirror.focus();
             showToast("Inserted Markdown table template.", 'success');
