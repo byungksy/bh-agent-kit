@@ -333,6 +333,106 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             padding: 24px !important;
         }
 
+        /* Command Palette Styles */
+        .palette-modal {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            padding-top: 100px;
+            z-index: 99999;
+            box-sizing: border-box;
+        }
+
+        .palette-content {
+            background: rgba(22, 27, 34, 0.95);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            width: 500px;
+            max-width: 90%;
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            animation: paletteSlideDown 0.15s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            backdrop-filter: blur(12px);
+        }
+
+        [data-theme="light"] .palette-content {
+            background: rgba(255, 255, 255, 0.95);
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.15);
+            color: #24292f;
+        }
+
+        @keyframes paletteSlideDown {
+            from { transform: translateY(-20px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        .palette-search-container {
+            display: flex;
+            align-items: center;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-color);
+            gap: 12px;
+        }
+
+        .palette-search-icon {
+            color: var(--accent-color);
+            font-size: 16px;
+        }
+
+        #palette-search {
+            background: transparent;
+            border: none;
+            color: var(--text-color);
+            font-family: 'Outfit', sans-serif;
+            font-size: 15px;
+            width: 100%;
+            outline: none;
+        }
+
+        .palette-results-list {
+            list-style: none;
+            margin: 0;
+            padding: 8px 0;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .palette-item {
+            padding: 10px 16px;
+            cursor: pointer;
+            display: flex;
+            flex-direction: column;
+            transition: background 0.15s ease;
+            color: var(--text-color);
+        }
+
+        .palette-item.active {
+            background: var(--accent-color);
+            color: #ffffff !important;
+        }
+
+        .palette-item-name {
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .palette-item-desc {
+            font-size: 11px;
+            color: #8b949e;
+            margin-top: 2px;
+        }
+
+        .palette-item.active .palette-item-desc {
+            color: rgba(255, 255, 255, 0.8) !important;
+        }
+
         .editor-preview {
             background-color: var(--bg-color) !important;
             color: var(--text-color) !important;
@@ -438,6 +538,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
     <div id="toast-container"></div>
 
+    <!-- Command Palette Modal -->
+    <div id="command-palette" class="palette-modal" style="display: none;">
+        <div class="palette-content">
+            <div class="palette-search-container">
+                <i class="fa-solid fa-magnifying-glass palette-search-icon"></i>
+                <input type="text" id="palette-search" placeholder="Type a command to run..." autocomplete="off">
+            </div>
+            <ul id="palette-results" class="palette-results-list"></ul>
+        </div>
+    </div>
+
+    <!-- Hidden File Input for Command Palette -->
+    <input type="file" id="palette-file-input" style="display: none;" multiple>
+
     <script src="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.js"></script>
 
     <script>
@@ -516,7 +630,173 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 e.stopPropagation();
                 viewInViewer();
             }
+            // Cmd+Shift+P / Ctrl+Shift+P (Command Palette)
+            if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'p') {
+                e.preventDefault();
+                e.stopPropagation();
+                toggleCommandPalette();
+            }
         }, true);
+
+        // Command Palette Logic
+        let paletteActiveIndex = 0;
+        let filteredCommands = [];
+        
+        const COMMANDS = [
+            { name: "Save Document", desc: "현재 변경사항 저장 (Cmd+S)", action: () => saveContent(true) },
+            { name: "Toggle Preview", desc: "미리보기 모드 토글 (F9)", action: () => easyMDE.togglePreview() },
+            { name: "Toggle Side-by-Side", desc: "좌우 스플릿 미리보기 모드 토글 (F10)", action: () => easyMDE.toggleSideBySide() },
+            { name: "Toggle Fullscreen", desc: "전체화면 모드 토글 (F11)", action: () => easyMDE.toggleFullScreen() },
+            { name: "Open in External Viewer", desc: "외부 bh-view-md 앱으로 열기 (Cmd+P)", action: () => viewInViewer() },
+            { name: "Switch Theme (Dark / Light)", desc: "다크/라이트 테마 변경", action: () => toggleTheme() },
+            { name: "Insert File (Image / Video / etc.)", desc: "로컬 파일 브라우저를 띄워 파일 첨부", action: () => triggerFileInput() },
+            { name: "Insert JavaScript Code Block", desc: "javascript 코드 블록 삽입", action: () => insertCodeBlock('javascript') },
+            { name: "Insert TypeScript Code Block", desc: "typescript 코드 블록 삽입", action: () => insertCodeBlock('typescript') },
+            { name: "Insert Markdown Table", desc: "3x2 테이블 서식 삽입", action: () => insertTable() },
+            { name: "Show Word Count", desc: "글자수 및 단어수 세기", action: () => showWordCount() },
+            { name: "Clear Unsaved Changes", desc: "저장하지 않은 변경사항 원본으로 되돌리기", action: () => resetContent() },
+            { name: "Exit & Shutdown", desc: "에디터를 종료하고 터미널로 복귀", action: () => exitEditor() }
+        ];
+
+        function toggleCommandPalette() {
+            const palette = document.getElementById('command-palette');
+            const searchInput = document.getElementById('palette-search');
+            
+            if (palette.style.display === 'none') {
+                palette.style.display = 'flex';
+                searchInput.value = '';
+                paletteActiveIndex = 0;
+                filterPaletteCommands('');
+                setTimeout(() => searchInput.focus(), 50);
+            } else {
+                palette.style.display = 'none';
+            }
+        }
+
+        function filterPaletteCommands(query) {
+            filteredCommands = COMMANDS.filter(cmd => 
+                cmd.name.toLowerCase().includes(query.toLowerCase()) || 
+                cmd.desc.toLowerCase().includes(query.toLowerCase())
+            );
+            
+            const resultsList = document.getElementById('palette-results');
+            resultsList.innerHTML = '';
+            
+            if (filteredCommands.length === 0) {
+                resultsList.innerHTML = '<li style="padding: 16px; text-align: center; color: #8b949e; font-size: 13px;">No commands found</li>';
+                return;
+            }
+            
+            if (paletteActiveIndex >= filteredCommands.length) {
+                paletteActiveIndex = filteredCommands.length - 1;
+            }
+            if (paletteActiveIndex < 0) {
+                paletteActiveIndex = 0;
+            }
+
+            filteredCommands.forEach((cmd, idx) => {
+                const li = document.createElement('li');
+                li.className = `palette-item ${idx === paletteActiveIndex ? 'active' : ''}`;
+                li.innerHTML = `
+                    <span class="palette-item-name">${cmd.name}</span>
+                    <span class="palette-item-desc">${cmd.desc}</span>
+                `;
+                li.addEventListener('click', () => {
+                    cmd.action();
+                    toggleCommandPalette();
+                });
+                resultsList.appendChild(li);
+            });
+            
+            const activeItem = resultsList.children[paletteActiveIndex];
+            if (activeItem) {
+                activeItem.scrollIntoView({ block: 'nearest' });
+            }
+        }
+
+        document.getElementById('palette-search').addEventListener('input', function(e) {
+            paletteActiveIndex = 0;
+            filterPaletteCommands(e.target.value);
+        });
+
+        document.getElementById('palette-search').addEventListener('keydown', function(e) {
+            const palette = document.getElementById('command-palette');
+            if (palette.style.display === 'none') return;
+            
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                paletteActiveIndex = (paletteActiveIndex + 1) % filteredCommands.length;
+                filterPaletteCommands(this.value);
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                paletteActiveIndex = (paletteActiveIndex - 1 + filteredCommands.length) % filteredCommands.length;
+                filterPaletteCommands(this.value);
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                if (filteredCommands[paletteActiveIndex]) {
+                    filteredCommands[paletteActiveIndex].action();
+                    toggleCommandPalette();
+                }
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                toggleCommandPalette();
+            }
+        });
+
+        document.getElementById('command-palette').addEventListener('click', function(e) {
+            if (e.target === this) {
+                toggleCommandPalette();
+            }
+        });
+
+        function insertCodeBlock(lang) {
+            const doc = easyMDE.codemirror.getDoc();
+            const cursor = doc.getCursor();
+            const template = `\`\`\`${lang}\n\n\`\`\`\n`;
+            doc.replaceRange(template, cursor);
+            doc.setCursor({ line: cursor.line + 1, ch: 0 });
+            easyMDE.codemirror.focus();
+            showToast(`Inserted ${lang} code block template.`, 'success');
+        }
+
+        function insertTable() {
+            const doc = easyMDE.codemirror.getDoc();
+            const cursor = doc.getCursor();
+            const template = "\n| Header 1 | Header 2 |\n| -------- | -------- |\n| Cell 1   | Cell 2   |\n";
+            doc.replaceRange(template, cursor);
+            easyMDE.codemirror.focus();
+            showToast("Inserted Markdown table template.", 'success');
+        }
+
+        function showWordCount() {
+            const text = easyMDE.value();
+            const charCount = text.length;
+            const wordCount = text.trim().split(/\s+/).filter(w => w.length > 0).length;
+            showToast(`Words: ${wordCount} | Characters: ${charCount}`, 'info');
+        }
+
+        function resetContent() {
+            if (confirm("저장하지 않은 모든 변경사항을 되돌리고 마지막 저장 지점으로 복원하시겠습니까?")) {
+                easyMDE.value(initialContent);
+                isDirty = false;
+                setSaveStatus('saved');
+                showToast("Document restored to initial save point.", 'info');
+            }
+        }
+
+        function triggerFileInput() {
+            document.getElementById('palette-file-input').click();
+        }
+
+        document.getElementById('palette-file-input').addEventListener('change', function(e) {
+            const files = e.target.files;
+            if (files.length > 0) {
+                for (let file of files) {
+                    uploadAndInsertFile(file);
+                }
+            }
+            this.value = ''; // Reset selection
+        });
 
         // Drag and Drop files inside workspace
         const workspace = document.getElementById('workspace');
@@ -589,9 +869,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     if (data.status === 'success') {
                         const isImage = file.type.startsWith('image/') || 
                                         /\\.(jpg|jpeg|png|gif|svg|webp)$/i.test(file.name);
+                        const isVideo = file.type.startsWith('video/') ||
+                                        /\\.(mp4|webm|ogg|mov)$/i.test(file.name);
                         let markdownLink = '';
                         if (isImage) {
                             markdownLink = `![${file.name}](${data.url})`;
+                        } else if (isVideo) {
+                            markdownLink = `\n<video src="${data.url}" controls style="max-width:100%; border-radius:8px;"></video>\n`;
                         } else {
                             markdownLink = `[${file.name}](${data.url})`;
                         }

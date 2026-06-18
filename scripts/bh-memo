@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import os
+import sys
+import datetime
+import subprocess
+
+C_GREEN = "\033[1;32m"
+C_CYAN = "\033[1;36m"
+C_RED = "\033[1;31m"
+C_YELLOW = "\033[1;33m"
+C_RESET = "\033[0m"
+
+OBSIDIAN_DIR = os.path.expanduser("~/bh-obsidian")
+DAILY_DIR = os.path.join(OBSIDIAN_DIR, "daily")
+TODO_FILE = os.path.join(OBSIDIAN_DIR, "todo.md")
+MEMO_FILE = os.path.join(OBSIDIAN_DIR, "memo.md")
+EDITOR_BIN = "/Users/a1101969/bin/bh-edit-md"
+
+def ensure_dirs():
+    os.makedirs(OBSIDIAN_DIR, exist_ok=True)
+    os.makedirs(DAILY_DIR, exist_ok=True)
+
+def open_editor(filepath):
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    
+    # Generate simple template if file does not exist
+    if not os.path.exists(filepath):
+        if DAILY_DIR in filepath:
+            filename = os.path.basename(filepath)
+            date_str = os.path.splitext(filename)[0]
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(f"# {date_str} Daily Note\n\n## Todos\n- [ ] \n\n## Memos\n\n## Journal\n\n")
+        elif filepath == TODO_FILE:
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write("# Todo List\n\n## Active\n- [ ] \n\n## Completed\n")
+        elif filepath == MEMO_FILE:
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write("# Quick Memos\n\n")
+                
+    editor = EDITOR_BIN if os.path.exists(EDITOR_BIN) else "bh-edit-md"
+    print(f"{C_GREEN}⚡ Opening {C_CYAN}{os.path.basename(filepath)}{C_GREEN} with {C_YELLOW}{editor}...{C_RESET}")
+    try:
+        subprocess.run([editor, filepath], check=True)
+    except KeyboardInterrupt:
+        print(f"\n{C_YELLOW}👋 Editor server closed. Bye!{C_RESET}")
+    except Exception as e:
+        print(f"{C_RED}Error running editor: {e}{C_RESET}")
+
+def get_sorted_md_files():
+    today_str = datetime.date.today().strftime("%Y-%m-%d")
+    today_rel = f"daily/{today_str}.md"
+    
+    files_with_time = []
+    for root, dirs, files in os.walk(OBSIDIAN_DIR):
+        # Skip hidden directories like .git
+        dirs[:] = [d for d in dirs if not d.startswith('.')]
+        for file in files:
+            if not file.endswith('.md'):
+                continue
+            path = os.path.join(root, file)
+            rel_path = os.path.relpath(path, OBSIDIAN_DIR)
+            mtime = os.path.getmtime(path)
+            files_with_time.append((rel_path, mtime))
+            
+    # Sort by mtime descending (most recently modified first)
+    files_with_time.sort(key=lambda x: x[1], reverse=True)
+    sorted_files = [x[0] for x in files_with_time]
+    
+    # Ensure today's daily note is ALWAYS at the very top of the list
+    if today_rel in sorted_files:
+        sorted_files.remove(today_rel)
+    sorted_files.insert(0, today_rel)
+    
+    return sorted_files
+
+def select_file_via_fzf(file_list):
+    try:
+        input_data = "\n".join(file_list).encode('utf-8')
+        # Execute fzf as interactive process
+        process = subprocess.Popen(
+            ['fzf', '--prompt=Select Note ❯ ', '--height=40%', '--reverse', '--border', '--info=inline'],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE
+        )
+        stdout, _ = process.communicate(input=input_data)
+        if process.returncode == 0:
+            return stdout.decode('utf-8').strip()
+    except FileNotFoundError:
+        print(f"{C_RED}Error: fzf utility not found in PATH.{C_RESET}")
+        print("Please install it using: brew install fzf")
+    return None
+
+def main():
+    ensure_dirs()
+    
+    if len(sys.argv) < 2:
+        # Default: list all notes via fzf
+        files = get_sorted_md_files()
+        selected = select_file_via_fzf(files)
+        if selected:
+            target_path = os.path.join(OBSIDIAN_DIR, selected)
+            open_editor(target_path)
+        else:
+            print(f"{C_YELLOW}Cancelled note selection.{C_RESET}")
+        return
+
+    arg = sys.argv[1].lower()
+    
+    if arg in ("todo", "t"):
+        open_editor(TODO_FILE)
+    elif arg in ("memo", "n", "note"):
+        open_editor(MEMO_FILE)
+    elif len(arg) == 10 and arg[4] == '-' and arg[7] == '-':
+        target_file = os.path.join(DAILY_DIR, f"{arg}.md")
+        open_editor(target_file)
+    else:
+        print(f"{C_RED}Error: Unknown command or invalid date format '{arg}'{C_RESET}\n")
+        print(f"{C_BOLD}Usage:{C_RESET}")
+        print(f"  {C_CYAN}bh-m{C_RESET}               : Select a note interactively via fzf (Today's note is on top)")
+        print(f"  {C_CYAN}bh-m t / todo{C_RESET}      : Open todo.md directly")
+        print(f"  {C_CYAN}bh-m n / memo{C_RESET}      : Open memo.md directly")
+        print(f"  {C_CYAN}bh-m YYYY-MM-DD{C_RESET}    : Open YYYY-MM-DD.md daily note directly")
+        print()
+
+if __name__ == "__main__":
+    main()
