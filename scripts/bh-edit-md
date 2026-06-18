@@ -761,6 +761,25 @@ class MarkdownEditHandler(BaseHTTPRequestHandler):
             
             self.wfile.write(output.encode('utf-8'))
             
+        elif parsed_path.path == '/view':
+            try:
+                # Try running from absolute bin folder or PATH
+                viewer_path = 'bh-view-md'
+                home_bin = os.path.expanduser('~/bin/bh-view-md')
+                if os.path.exists(home_bin):
+                    viewer_path = home_bin
+                
+                subprocess.Popen([viewer_path, MD_FILE_PATH])
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "success"}).encode('utf-8'))
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+                
         elif parsed_path.path.startswith('/assets/'):
             # Allow serving uploaded assets
             asset_rel_path = parsed_path.path[1:] # e.g. "assets/image.png"
@@ -839,25 +858,6 @@ class MarkdownEditHandler(BaseHTTPRequestHandler):
                     "url": relative_url,
                     "filename": unique_name
                 }).encode('utf-8'))
-            except Exception as e:
-                self.send_response(500)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
-        
-        elif parsed_path.path == '/view':
-            try:
-                # Try running from absolute bin folder or PATH
-                viewer_path = 'bh-view-md'
-                home_bin = os.path.expanduser('~/bin/bh-view-md')
-                if os.path.exists(home_bin):
-                    viewer_path = home_bin
-                
-                subprocess.Popen([viewer_path, MD_FILE_PATH])
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json')
-                self.end_headers()
-                self.wfile.write(json.dumps({"status": "success"}).encode('utf-8'))
             except Exception as e:
                 self.send_response(500)
                 self.send_header('Content-Type', 'application/json')
