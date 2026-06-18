@@ -11,7 +11,8 @@
 | `skills/` | 온디맨드 스킬 (`*/SKILL.md`) |
 | `hooks/` | Cursor agent 훅 (`beforeSubmitPrompt`, `stop` 등) |
 | `scripts/` | 로컬 `~/bin` 및 `~/.agents/scripts`에서 사용되는 개인용 유틸리티 쉘 스크립트 모음 |
-| `etc/hammerspoon/` | Hammerspoon URL scheme 스니펫 (`cursor-done` 등) |
+| `etc/hammerspoon/` | Hammerspoon 전체 설정 및 완료 알림 스니펫 |
+| `etc/karabiner/` | Karabiner-Elements 키 매핑 설정 (`karabiner.json`) |
 | `etc/sources/` | 각 룰·스킬의 출처·참고 링크·내부 통합 메모 |
 
 ## 설치 예시
