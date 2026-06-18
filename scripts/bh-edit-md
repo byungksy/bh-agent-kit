@@ -125,10 +125,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             color: #8b949e;
             font-family: 'Fira Code', monospace;
             white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            max-width: 300px;
             opacity: 0.8;
+            cursor: pointer;
+            transition: color 0.2s ease;
+        }
+
+        .header-path:hover {
+            color: var(--accent-color);
+            text-decoration: underline;
         }
 
         /* Status indicator */
@@ -366,6 +370,27 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .drag-active .drag-overlay {
             opacity: 1;
         }
+
+        /* Fix EasyMDE fullscreen & side-by-side mode layout issues */
+        .editor-toolbar.fullscreen {
+            top: 60px !important;
+            z-index: 999 !important;
+            height: 50px !important;
+            background-color: var(--header-bg) !important;
+            backdrop-filter: blur(12px);
+        }
+
+        .CodeMirror-fullscreen {
+            top: 110px !important;
+            z-index: 999 !important;
+            height: calc(100vh - 110px) !important;
+        }
+
+        .editor-preview-side {
+            top: 110px !important;
+            z-index: 999 !important;
+            height: calc(100vh - 110px) !important;
+        }
     </style>
 </head>
 <body data-theme="dark">
@@ -422,9 +447,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         const fileName = {{FILE_NAME_JS}};
         const fileDir = {{FILE_DIR_JS}};
 
+        const fullPath = {{FULL_PATH_JS}};
         document.getElementById('header-title').textContent = fileName;
-        document.getElementById('header-path').textContent = fileDir;
+        document.getElementById('header-path').textContent = fullPath;
         document.title = "Editor: " + fileName;
+
+        // Clipboard Copy on Click
+        const pathEl = document.getElementById('header-path');
+        pathEl.addEventListener('click', function() {
+            navigator.clipboard.writeText(fullPath).then(() => {
+                showToast('Full path copied to clipboard!', 'success');
+            }).catch(err => {
+                showToast('Failed to copy: ' + err, 'error');
+            });
+        });
 
         // Initialize EasyMDE
         const easyMDE = new EasyMDE({
@@ -466,13 +502,21 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }, 3000); // Auto-save after 3 seconds of inactivity
         });
 
-        // Handle Cmd+S / Ctrl+S
+        // Handle global key shortcuts (capturing phase to override editor & browser defaults)
         document.addEventListener('keydown', function(e) {
-            if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+            // Cmd+S / Ctrl+S (Save)
+            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
                 e.preventDefault();
+                e.stopPropagation();
                 saveContent(true);
             }
-        });
+            // Cmd+P / Ctrl+P (Open in Viewer)
+            if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'p') {
+                e.preventDefault();
+                e.stopPropagation();
+                viewInViewer();
+            }
+        }, true);
 
         // Drag and Drop files inside workspace
         const workspace = document.getElementById('workspace');
@@ -763,6 +807,7 @@ class MarkdownEditHandler(BaseHTTPRequestHandler):
             # Safe JSON replacement
             output = HTML_TEMPLATE.replace('{{FILE_NAME_JS}}', json.dumps(FILE_NAME))
             output = output.replace('{{FILE_DIR_JS}}', json.dumps(FILE_DIR))
+            output = output.replace('{{FULL_PATH_JS}}', json.dumps(MD_FILE_PATH))
             output = output.replace('{{INITIAL_CONTENT}}', json.dumps(content).replace('</', '<\\/'))
             
             self.wfile.write(output.encode('utf-8'))
@@ -885,6 +930,7 @@ class MarkdownEditHandler(BaseHTTPRequestHandler):
 def kill_existing_servers():
     current_pid = os.getpid()
     try:
+        target_file = os.path.abspath(sys.argv[1])
         # On macOS, ps -ax -o pid,command lists all processes with PID and command
         output = subprocess.check_output(['ps', '-ax', '-o', 'pid,command']).decode('utf-8', errors='ignore')
         for line in output.splitlines():
@@ -895,16 +941,19 @@ def kill_existing_servers():
                     try:
                         pid = int(pid_str)
                         if pid != current_pid:
-                            print(f"Stopping existing bh-edit-md server (PID {pid})...")
-                            os.kill(pid, 15) # SIGTERM
-                            time.sleep(0.1) # Small pause to let it exit
+                            # Check if the process is editing the same file
+                            cmd_clean = cmd.replace('"', '').replace("'", "")
+                            if target_file in cmd_clean or os.path.basename(target_file) in cmd_clean:
+                                print(f"Stopping existing editor server for {os.path.basename(target_file)} (PID {pid})...")
+                                os.kill(pid, 15) # SIGTERM
+                                time.sleep(0.1) # Small pause to let it exit
                     except (ValueError, ProcessLookupError, PermissionError):
                         pass
     except Exception:
         pass
 
 def main():
-    # Kill existing editor servers first to clean up old instances
+    # Kill existing editor servers first to clean up old instances editing the same file
     kill_existing_servers()
     
     server_address = ('127.0.0.1', 0)
