@@ -52,6 +52,7 @@ Cursor `알려줘` 완료 알림은 `bh-cursor-notify-setup` 한 번으로 hooks
 로컬 개발 및 AI 에이전트 연동을 위한 개인용 쉘 스크립트 도구들입니다.
 
 ### 1. 에이전트 & 세션 도구
+* **`bh-cursor-notify-setup`**: 프롬프트 `알려줘` 감지 → 에이전트 완료 시 Hammerspoon 5초 알림 (클릭 시 Cursor 포커스). hooks + `init.lua` 스니펫 설치.
 * **`bh-cursor-sessions-today.sh`**: fzf 기반의 대화형 Cursor 세션 뷰어. 좌우 방향키로 날짜 이동 및 에이전트 재개(`--resume`) 기능을 제공합니다.
 * **`bh-agy-session`**: CLI 에이전트 세션 관련 유틸리티.
 * **`bh-agent-sync`**: 로컬 에이전트 룰과 스킬을 각 프로젝트 및 전역 설정과 동기화합니다.
@@ -81,6 +82,7 @@ Cursor `알려줘` 완료 알림은 `bh-cursor-notify-setup` 한 번으로 hooks
 * **`bh-til-log`**: 오늘 하루 배운 점이나 작업을 간편하게 CLI에서 로깅합니다.
 * **`bh-til-view`**: 로깅된 TIL 히스토리를 요약해 보여주는 뷰어입니다.
 * **`bh-view-md`**: 터미널 환경에서 마크다운(`.md`) 파일을 가독성 좋게 출력합니다.
+* **`bh-edit-md`**: 로컬 웹 브라우저 기반의 실시간 마크다운 에디터. 파일/이미지 드래그&드롭 자동 첨부(assets/) 및 `bh-view-md` 연동 지원.
 
 ### 6. 시스템 유틸리티
 * **`bh-port-kill`**: 특정 포트를 점유 중인 프로세스를 포트 번호 기반으로 편리하게 강제 종료합니다.
