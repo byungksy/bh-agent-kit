@@ -9,6 +9,7 @@
 | `rules/` | 에이전트에 주입할 룰 본문 (`.md`) |
 | `rules-meta.json` | 룰별 `alwaysApply`·`description` (Cursor frontmatter 생성용) |
 | `skills/` | 온디맨드 스킬 (`*/SKILL.md`) |
+| `hooks/` | Cursor 훅 스크립트 (`*.sh`). `~/.cursor/hooks/`로 복사 후 `~/.cursor/hooks.json`에 등록 |
 | `etc/sources/` | 각 룰·스킬의 출처·참고 링크·내부 통합 메모 |
 
 ## 설치 예시
@@ -37,5 +38,26 @@ bash ~/.agents/scripts/sync-to-agents.sh --full
 | 경로 | 요약 |
 |------|------|
 | `skills/grill-me/` | 구현·플랜·PR 스택 착수 전 G1–G15 검증 (grill-me, 플랜 검증) |
+
+## 훅 목록
+
+| 파일 | 이벤트 | 요약 |
+|------|--------|------|
+| `hooks/show-turn-model.sh` | `afterAgentResponse` | auto 모드 turn별 사용 모델을 stderr(Cursor Hooks 채널) + `~/.cursor/turn-models.jsonl`에 기록 |
+
+### 훅 설치
+
+```bash
+cp hooks/*.sh ~/.cursor/hooks/
+chmod +x ~/.cursor/hooks/*.sh
+```
+
+이후 `~/.cursor/hooks.json`의 해당 이벤트 배열에 항목 추가:
+
+```json
+"afterAgentResponse": [
+  { "command": "~/.cursor/hooks/show-turn-model.sh", "timeout": 3 }
+]
+```
 
 출처는 `etc/sources/` 참고.
