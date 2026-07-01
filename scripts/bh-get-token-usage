@@ -1,0 +1,280 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+API_BASE="https://api.cursor.com"
+DEFAULT_PAGE_SIZE=200
+DEFAULT_TOP=20
+
+usage() {
+  cat <<'EOF'
+Usage:
+  bh-get-token-usage [options]
+
+Options:
+  --start-date YYYY-MM-DD   시작일 (기본: 30일 전)
+  --end-date YYYY-MM-DD     종료일 (기본: 오늘)
+  --top N                   상위 N명 출력 (기본: 20)
+  --users CSV               특정 사용자 필터 (email 또는 user_id, 쉼표 구분)
+  --page-size N             API pageSize (기본: 200, 최대: 500)
+  -h, --help                도움말
+
+인증 토큰 탐색 순서:
+  1) CURSOR_API_KEY 환경변수
+  2) ~/.config/11st-ai-credentials.env 의 CURSOR_API_KEY
+  3) ~/.cursor/api-key 파일 (첫 줄)
+  4) macOS Keychain (일반적인 service/internet 항목)
+EOF
+}
+
+require_cmd() {
+  command -v "$1" >/dev/null 2>&1 || {
+    echo "오류: '$1' 명령이 필요합니다." >&2
+    exit 1
+  }
+}
+
+trim() {
+  local s="$1"
+  s="${s#"${s%%[![:space:]]*}"}"
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "$s"
+}
+
+from_file_first_line() {
+  local file="$1"
+  [[ -f "$file" ]] || return 1
+  local line
+  line="$(python3 - "$file" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+try:
+    text = p.read_text(encoding="utf-8", errors="ignore")
+except Exception:
+    print("")
+    raise SystemExit
+print((text.splitlines()[:1] or [""])[0].strip())
+PY
+)"
+  [[ -n "$line" ]] || return 1
+  printf '%s' "$line"
+}
+
+from_keychain_generic_service() {
+  local service="$1"
+  security find-generic-password -w -s "$service" 2>/dev/null || return 1
+}
+
+from_keychain_internet_service() {
+  local host="$1"
+  security find-internet-password -w -s "$host" 2>/dev/null || return 1
+}
+
+from_credentials_env() {
+  local file="$HOME/.config/11st-ai-credentials.env"
+  [[ -f "$file" ]] || return 1
+  python3 - "$file" <<'PY'
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1])
+try:
+    text = p.read_text(encoding="utf-8", errors="ignore")
+except Exception:
+    raise SystemExit
+for line in text.splitlines():
+    m = re.match(r'\s*(?:export\s+)?CURSOR_API_KEY\s*=\s*(.+?)\s*$', line)
+    if m:
+        val = m.group(1)
+        if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+            val = val[1:-1]
+        print(val)
+        break
+PY
+}
+
+resolve_api_key() {
+  local key=""
+
+  if [[ -n "${CURSOR_API_KEY:-}" ]]; then
+    key="$(trim "$CURSOR_API_KEY")"
+    [[ -n "$key" ]] && { printf '%s' "$key"; return 0; }
+  fi
+
+  if key="$(from_credentials_env 2>/dev/null)"; then
+    key="$(trim "$key")"
+    [[ -n "$key" ]] && { printf '%s' "$key"; return 0; }
+  fi
+
+  if key="$(from_file_first_line "$HOME/.cursor/api-key" 2>/dev/null)"; then
+    key="$(trim "$key")"
+    [[ -n "$key" ]] && { printf '%s' "$key"; return 0; }
+  fi
+
+  # ponytail: keychain service명은 환경마다 다르므로 최소한의 후보만 순회한다.
+  local service
+  for service in \
+    "CURSOR_API_KEY" \
+    "cursor_api_key" \
+    "cursor-api-key" \
+    "Cursor API Key" \
+    "cursor api key" \
+    "cursor.com api key"
+  do
+    if key="$(from_keychain_generic_service "$service" 2>/dev/null)"; then
+      key="$(trim "$key")"
+      [[ -n "$key" ]] && { printf '%s' "$key"; return 0; }
+    fi
+  done
+
+  if key="$(from_keychain_internet_service "api.cursor.com" 2>/dev/null)"; then
+    key="$(trim "$key")"
+    [[ -n "$key" ]] && { printf '%s' "$key"; return 0; }
+  fi
+
+  return 1
+}
+
+default_start_date() {
+  date -v-30d '+%Y-%m-%d' 2>/dev/null || date -d '30 days ago' '+%Y-%m-%d'
+}
+
+default_end_date() {
+  date '+%Y-%m-%d'
+}
+
+START_DATE="$(default_start_date)"
+END_DATE="$(default_end_date)"
+TOP_N="$DEFAULT_TOP"
+PAGE_SIZE="$DEFAULT_PAGE_SIZE"
+USERS_FILTER=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --start-date)
+      START_DATE="${2:-}"
+      shift 2
+      ;;
+    --end-date)
+      END_DATE="${2:-}"
+      shift 2
+      ;;
+    --top)
+      TOP_N="${2:-}"
+      shift 2
+      ;;
+    --users)
+      USERS_FILTER="${2:-}"
+      shift 2
+      ;;
+    --page-size)
+      PAGE_SIZE="${2:-}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "오류: 알 수 없는 옵션 '$1'" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+require_cmd curl
+require_cmd jq
+require_cmd python3
+require_cmd security
+
+if ! [[ "$TOP_N" =~ ^[0-9]+$ ]] || [[ "$TOP_N" -lt 1 ]]; then
+  echo "오류: --top 은 1 이상의 정수여야 합니다." >&2
+  exit 1
+fi
+if ! [[ "$PAGE_SIZE" =~ ^[0-9]+$ ]] || [[ "$PAGE_SIZE" -lt 1 ]] || [[ "$PAGE_SIZE" -gt 500 ]]; then
+  echo "오류: --page-size 는 1~500 정수여야 합니다." >&2
+  exit 1
+fi
+
+API_KEY=""
+if ! API_KEY="$(resolve_api_key)"; then
+  cat >&2 <<'EOF'
+오류: Cursor API Key를 찾지 못했습니다.
+
+권장(기존 SSOT 유지):
+  ~/.config/11st-ai-credentials.env 에 아래 한 줄 추가
+    CURSOR_API_KEY=your_key_here
+
+또는:
+  export CURSOR_API_KEY="..."
+  echo "your_key" > ~/.cursor/api-key && chmod 600 ~/.cursor/api-key
+EOF
+  exit 1
+fi
+
+tmp_file="$(mktemp)"
+trap 'rm -f "$tmp_file"' EXIT
+
+page=1
+while : ; do
+  url="${API_BASE}/analytics/by-user/models?startDate=${START_DATE}&endDate=${END_DATE}&page=${page}&pageSize=${PAGE_SIZE}"
+  if [[ -n "$USERS_FILTER" ]]; then
+    url="${url}&users=${USERS_FILTER}"
+  fi
+
+  response="$(curl -fsS -u "${API_KEY}:" "$url" 2>/dev/null || true)"
+  if [[ -z "$response" ]]; then
+    echo "오류: API 호출 실패 (페이지 ${page})" >&2
+    echo "힌트: API Key 권한(Enterprise Admin)과 날짜 파라미터를 확인하세요." >&2
+    exit 1
+  fi
+
+  if ! echo "$response" | jq -e '.data and .pagination' >/dev/null 2>&1; then
+    echo "오류: 응답 형식이 예상과 다릅니다." >&2
+    echo "$response" | jq . 2>/dev/null || true
+    exit 1
+  fi
+
+  echo "$response" | jq -r '
+    .data
+    | to_entries[]
+    | [
+        .key,
+        (
+          [
+            .value[]?.model_breakdown // {}
+            | to_entries[]?.value.messages // 0
+          ] | add // 0
+        )
+      ]
+    | @tsv
+  ' >> "$tmp_file"
+
+  has_next="$(echo "$response" | jq -r '.pagination.hasNextPage // false')"
+  [[ "$has_next" == "true" ]] || break
+  page=$((page + 1))
+done
+
+if [[ ! -s "$tmp_file" ]]; then
+  echo "결과 없음: 해당 기간/필터에 사용자 데이터가 없습니다."
+  exit 0
+fi
+
+echo "Cursor Token Usage (proxy: messages) | ${START_DATE} ~ ${END_DATE}"
+echo "---------------------------------------------------------------"
+printf "%-6s %-45s %12s\n" "Rank" "User" "Messages"
+echo "---------------------------------------------------------------"
+
+awk -F'\t' '
+  { sum[$1] += $2 }
+  END {
+    for (u in sum) {
+      printf "%s\t%d\n", u, sum[u]
+    }
+  }
+' "$tmp_file" \
+| sort -t$'\t' -k2,2nr -k1,1 \
+| awk -F'\t' -v top="$TOP_N" '
+  NR <= top {
+    printf "%-6d %-45s %12d\n", NR, $1, $2
+  }
+'
+

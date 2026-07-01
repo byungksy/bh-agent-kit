@@ -18,5 +18,9 @@
   "prompt-anchor": {
     "description": "`->`/이거·직전 답 지시 시 대화 맥락 우선. 불필요한 transcript·grep 금지. 애매하면 1문장 질문",
     "alwaysApply": true
+  },
+  "bh-token-lookup": {
+    "description": "인증 토큰 탐색 순서(SSOT). 새 bh-* 스크립트 작성·토큰 없음 실패·Cursor 사용량/랭킹/analytics 조회 시 Read. Cursor accessToken(state.vscdb) vs Analytics API Key(credentials.env) 구분, mcp.json/bh-secrets/Keychain 순회 규정",
+    "alwaysApply": false
   }
 }
