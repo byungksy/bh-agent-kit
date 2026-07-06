@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # TIL(Today I Learned) 한 줄 메모를 파일에 누적한다.
-# 요약·출처는 에이전트(11st-til 스킬)가 담당. 이 스크립트는 저장만 한다.
+# 요약·출처는 에이전트(company-til 스킬)가 담당. 이 스크립트는 저장만 한다.
 TIL_FILE="${TIL_FILE:-$HOME/.til.md}"
 TODAY=$(date '+%Y-%m-%d')
 

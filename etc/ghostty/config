@@ -53,3 +53,18 @@ font-family = "D2Coding"
 macos-titlebar-style = tabs
 
 keybind = ctrl+shift+t=prompt_surface_title
+
+# Ghostty selection adjustments (Progressive Selection)
+# 1. Character-level selection (Shift + Arrow keys)
+keybind = shift+left=adjust_selection:left
+keybind = shift+right=adjust_selection:right
+keybind = shift+up=adjust_selection:up
+keybind = shift+down=adjust_selection:down
+
+# 2. Word-level selection (Option + Shift + Arrow keys)
+keybind = opt+shift+left=adjust_selection:word_left
+keybind = opt+shift+right=adjust_selection:word_right
+
+# 3. Line-level selection (Command + Shift + Arrow keys)
+keybind = cmd+shift+left=adjust_selection:beginning_of_line
+keybind = cmd+shift+right=adjust_selection:end_of_line

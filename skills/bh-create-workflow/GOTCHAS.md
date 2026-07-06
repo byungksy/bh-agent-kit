@@ -1,4 +1,4 @@
-# 11st Workflow Gotchas
+# Company Workflow Gotchas
 
 - **Don't use syntax error prone Mermaid code**: Mermaid 문법 에러가 발생하면 브라우저 렌더링에 실패하여 화면이 빈 채로 남는다. 텍스트 내에 괄호`()`, 대괄호`[]`, 중괄호`{}`, 특수문자, 쉼표 등이 들어가면 반드시 쌍따옴표 `""`로 감싸서 선언해야 한다.
 - **Don't save in project root**: HTML/MD 결과물을 프로젝트 루트나 엉뚱한 임시 디렉터리에 마구 생성하지 않는다. **MUST** 홈 디렉터리 하위의 `~/ai-workflow/diagrams/` 디렉터리 하위에 저장하여 여러 프로젝트에서 생성된 모든 다이어그램 파일들을 한 곳에서 깔끔하게 통합 관리한다.

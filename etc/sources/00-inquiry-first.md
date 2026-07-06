@@ -20,14 +20,14 @@
 | 룰 작성 (500줄 이하, 검증 가능) | Cursor Docs — Rules | https://cursor.com/help/customization/rules |
 | 충돌 시 clarification | AgentSpec Cursor v5 예시 | https://agentspec.sh/rules/9d7641af-8654-4734-9a41-4ee68db80f2f |
 
-## 내부 통합 (개인 ~/.agents·11st toolkit)
+## 내부 통합 (개인 ~/.agents·company toolkit)
 
 | 구성요소 | 역할 |
 |----------|------|
-| `11st-company-rules` | "확인 먼저", 추측 금지 → inquiry-first §Precedence에서 구체화 |
+| `company-rules` | "확인 먼저", 추측 금지 → inquiry-first §Precedence에서 구체화 |
 | `grill-me` 스킬 | 구현·플랜·stack 착수 전 심화 역질문 (opt-in) → §7 위임 |
 | `context-gate` / `work-context` | plan_gate, 브랜치·범위 확인 → §7 위임 |
-| `11st-harness-process` C항 | 플랜 승인 후 Task 연속 실행 → §7 예외 |
+| `company-harness-process` C항 | 플랜 승인 후 Task 연속 실행 → §7 예외 |
 | `communication-style` | 산출 톤 → §6, Precedence 5순위 |
 | `output-writing` (프로젝트 `.agents`) | PR·요약 형식 → §6, Precedence 충돌 해석 |
 | User rule "MUST run commands" | §Precedence — read-only 탐색 허용, blocking 시 쓰기 금지 |

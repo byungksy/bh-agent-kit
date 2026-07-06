@@ -6,7 +6,7 @@
 
 | 유형 | 설명 |
 |------|------|
-| 내부 | 11st FE 에이전트 톤 가이드 — 과도한 칭찬·아첨 배제, 건조·두괄식 |
+| 내부 | company FE 에이전트 톤 가이드 — 과도한 칭찬·아첨 배제, 건조·두괄식 |
 | SSOT | `~/.agents/rules/communication-style.md` → Cursor `communication-style.mdc` (alwaysApply) |
 
 ## 관련 외부 (톤만, 본문 직접 인용 아님)
