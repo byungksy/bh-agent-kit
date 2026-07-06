@@ -220,10 +220,36 @@ while : ; do
     url="${url}&users=${USERS_FILTER}"
   fi
 
-  response="$(curl -fsS -u "${API_KEY}:" "$url" 2>/dev/null || true)"
-  if [[ -z "$response" ]]; then
-    echo "오류: API 호출 실패 (페이지 ${page})" >&2
-    echo "힌트: API Key 권한(Enterprise Admin)과 날짜 파라미터를 확인하세요." >&2
+  http_code=""
+  response="$(
+    curl -sS -u "${API_KEY}:" "$url" \
+      -w $'\n__HTTP_CODE__:%{http_code}' 2>/dev/null || true
+  )"
+  http_code="${response##*$'\n__HTTP_CODE__:'}"
+  response="${response%$'\n__HTTP_CODE__:'*}"
+
+  if [[ "$http_code" != "200" || -z "$response" ]]; then
+    api_message="$(echo "$response" | jq -r '.message // .error // empty' 2>/dev/null || true)"
+
+    if [[ "$http_code" == "401" && "$api_message" == "Invalid Team API Key" ]]; then
+      user_key_ok=false
+      if curl -sf -u "${API_KEY}:" "https://api.cursor.com/v0/me" >/dev/null 2>&1; then
+        user_key_ok=true
+      fi
+
+      echo "오류: Analytics API는 Team Admin API Key가 필요합니다 (HTTP 401)." >&2
+      if $user_key_ok; then
+        echo "현재 키는 User API Key(crsr_...)로 확인됩니다. /v0/me 는 성공하지만 /analytics/* 는 거부됩니다." >&2
+        echo "조치: Cursor Dashboard → API Keys → New API Key (Team Admin / admin scope) 발급 후 credentials.env 교체" >&2
+      else
+        echo "조치: Dashboard → API Keys 에서 Team Admin API Key 를 발급하거나 키 값을 확인하세요." >&2
+      fi
+      exit 1
+    fi
+
+    echo "오류: API 호출 실패 (페이지 ${page}, HTTP ${http_code:-unknown})" >&2
+    [[ -n "$api_message" ]] && echo "응답: ${api_message}" >&2
+    echo "힌트: Team Admin API Key, Enterprise 권한, 날짜 파라미터를 확인하세요." >&2
     exit 1
   fi
 

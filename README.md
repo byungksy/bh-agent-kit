@@ -10,7 +10,10 @@
 | `rules-meta.json` | 룰별 `alwaysApply`·`description` (Cursor frontmatter 생성용) |
 | `skills/` | 온디맨드 스킬 (`*/SKILL.md`) |
 | `hooks/` | Cursor 훅 스크립트 (`*.sh`). `~/.cursor/hooks/`로 복사 후 `~/.cursor/hooks.json`에 등록 |
+| `etc/mac-setup.md` | 작업 PC 필수 소프트웨어 구성 및 가이드 (SSOT) |
+| `etc/bh-onboarding.md` | 로컬 복습용 온보딩 가이드 문서 |
 | `etc/sources/` | 각 룰·스킬의 출처·참고 링크·내부 통합 메모 |
+
 
 ## 설치 예시
 
