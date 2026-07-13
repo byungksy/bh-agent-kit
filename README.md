@@ -25,6 +25,24 @@ cp -R skills/* ~/.agents/skills/             # 스킬 추가·갱신
 bash ~/.agents/scripts/sync-to-agents.sh --full
 ```
 
+## Kiro CLI 포팅
+
+rules → `~/.kiro/steering/`, skills → `~/.kiro/skills/`, hooks → agent JSON `hooks` 필드로 연동한다.
+
+```bash
+# rules 심볼릭 링크
+for f in ~/bh-agent-kit/rules/*.md; do
+  ln -sf "$f" ~/.kiro/steering/$(basename "$f")
+done
+
+# skills 심볼릭 링크
+for d in ~/bh-agent-kit/skills/*/; do
+  ln -snf "$d" ~/.kiro/skills/$(basename "$d")
+done
+```
+
+상세 가이드: [`docs/kiro-porting.md`](docs/kiro-porting.md)
+
 `00-inquiry-first.md`는 파일명 순으로 Codex `AGENTS.md` 맨 위에 오도록 `00-` 접두어를 유지한다.
 
 ## 룰 목록
