@@ -10,6 +10,7 @@
 | `rules-meta.json` | 룰별 `alwaysApply`·`description` (Cursor frontmatter 생성용) |
 | `skills/` | 온디맨드 스킬 (`*/SKILL.md`) |
 | `hooks/` | Cursor 훅 스크립트 (`*.sh`). `~/.cursor/hooks/`로 복사 후 `~/.cursor/hooks.json`에 등록 |
+| `scripts/` | 로컬 및 에이전트 유틸리티 스크립트 (`bh-alert`, `bh-cli-export` 등) |
 | `etc/mac-setup.md` | 작업 PC 필수 소프트웨어 구성 및 가이드 (SSOT) |
 | `etc/bh-onboarding.md` | 로컬 복습용 온보딩 가이드 문서 |
 | `etc/sources/` | 각 룰·스킬의 출처·참고 링크·내부 통합 메모 |
@@ -81,5 +82,12 @@ chmod +x ~/.cursor/hooks/*.sh
   { "command": "~/.cursor/hooks/show-turn-model.sh", "timeout": 3 }
 ]
 ```
+
+## 스크립트 목록
+
+| 파일 | 요약 |
+|------|------|
+| `scripts/bh-alert` | macOS 시스템 알림 팝업 및 Slack DM을 전송하는 범용 알림 헬퍼 |
+| `scripts/bh-cli-export` | CLI 출력 결과를 HTML(컬러 보존) 또는 ASCII(시퀀스 제거) 텍스트 파일로 내보내기 |
 
 출처는 `etc/sources/` 참고.

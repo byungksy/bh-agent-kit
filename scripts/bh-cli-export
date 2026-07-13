@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# bh-cli-export — CLI 출력물(ANSI escape sequence)을 HTML 또는 깨끗한 ASCII(Plain Text)로 내보냅니다.
+#
+# Usage:
+#   # HTML로 내보내기 (자동으로 aha 사용)
+#   git diff --color=always | bh-cli-export output.html
+#   
+#   # ASCII(Plain Text)로 내보내기 (ANSI 이스케이프 코드 제거)
+#   git diff --color=always | bh-cli-export output.txt
+#
+#   # command 옵션 사용
+#   bh-cli-export --command "git diff --color=always" --format html --out diff.html
+
+# ANSI 이스케이프 시퀀스 제거 함수 (Plain Text/ASCII 용)
+strip_ansi() {
+  perl -pe 's/\e\[[0-9;]*[mGKH]//g'
+}
+
+# 기본 변수 설정
+FORMAT=""
+OUTPUT_FILE=""
+COMMAND_TO_RUN=""
+
+# 인수 파싱
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -c|--command)
+      COMMAND_TO_RUN="$2"
+      shift 2
+      ;;
+    -f|--format)
+      FORMAT="$2"
+      shift 2
+      ;;
+    -o|--out)
+      OUTPUT_FILE="$2"
+      shift 2
+      ;;
+    -h|--help)
+      echo "Usage: bh-cli-export [options] [output_file]"
+      echo "Options:"
+      echo "  -c, --command <cmd>   실행할 명령어 (명령어의 출력을 캡처)"
+      echo "  -f, --format <format> 출력 포맷 (html, ascii, ansi)"
+      echo "  -o, --out <file>      결과를 저장할 파일 경로"
+      exit 0
+      ;;
+    *)
+      # 포지셔널 인자는 출력 파일명으로 간주
+      OUTPUT_FILE="$1"
+      shift
+      ;;
+  esac
+done
+
+# 파일 확장자를 기반으로 포맷 자동 감지
+if [ -z "$FORMAT" ] && [ -n "$OUTPUT_FILE" ]; then
+  case "$OUTPUT_FILE" in
+    *.html|*.htm) FORMAT="html" ;;
+    *.txt|*.log)  FORMAT="ascii" ;;
+    *.ansi)       FORMAT="ansi" ;;
+    *)            FORMAT="ascii" ;;
+  esac
+fi
+
+# 기본 포맷은 html로 설정
+FORMAT="${FORMAT:-html}"
+
+# 입력 소스 가져오기 (명령어 실행 vs Stdin)
+if [ -n "$COMMAND_TO_RUN" ]; then
+  # 명령어를 실행하고 stdout, stderr 모두 캡처
+  INPUT_CONTENT=$(eval "$COMMAND_TO_RUN" 2>&1)
+else
+  # stdin이 들어올 때까지 대기
+  if [ -t 0 ]; then
+    echo "오류: stdin 입력이 없거나 --command 옵션이 지정되지 않았습니다."
+    echo "예: git diff --color=always | bh-cli-export diff.html"
+    exit 1
+  fi
+  INPUT_CONTENT=$(cat)
+fi
+
+# 포맷에 따른 처리 및 저장
+if [ "$FORMAT" = "html" ]; then
+  # aha가 있는지 확인 및 설치 권장
+  if ! command -v aha &> /dev/null; then
+    echo "HTML 변환을 위해 'aha' (Ansi HTML Adapter) 유틸리티가 필요합니다." >&2
+    echo "설치를 진행합니다... (brew install aha)" >&2
+    if command -v brew &> /dev/null; then
+      brew install aha >&2
+    else
+      echo "오류: Homebrew가 설치되어 있지 않아 'aha'를 설치할 수 없습니다." >&2
+      echo "수동으로 'aha'를 설치해 주세요." >&2
+      exit 1
+    fi
+  fi
+  
+  # HTML로 변환하여 출력 혹은 파일 저장
+  if [ -n "$OUTPUT_FILE" ]; then
+    echo "$INPUT_CONTENT" | aha > "$OUTPUT_FILE"
+    echo "✅ HTML 파일 저장 완료: $OUTPUT_FILE"
+  else
+    echo "$INPUT_CONTENT" | aha
+  fi
+
+elif [ "$FORMAT" = "ascii" ] || [ "$FORMAT" = "plain" ]; then
+  # ANSI escape code 제거 후 출력 혹은 파일 저장
+  if [ -n "$OUTPUT_FILE" ]; then
+    echo "$INPUT_CONTENT" | strip_ansi > "$OUTPUT_FILE"
+    echo "✅ Plain Text 파일 저장 완료: $OUTPUT_FILE"
+  else
+    echo "$INPUT_CONTENT" | strip_ansi
+  fi
+
+elif [ "$FORMAT" = "ansi" ]; then
+  # 원본 그대로 출력 혹은 파일 저장
+  if [ -n "$OUTPUT_FILE" ]; then
+    echo "$INPUT_CONTENT" > "$OUTPUT_FILE"
+    echo "✅ ANSI Raw 파일 저장 완료: $OUTPUT_FILE"
+  else
+    echo "$INPUT_CONTENT"
+  fi
+else
+  echo "오류: 알 수 없는 포맷 '$FORMAT' (지원 포맷: html, ascii, ansi)" >&2
+  exit 1
+fi
