@@ -2,6 +2,7 @@
 
 코딩 에이전트의 **행동(가정·질문·멈춤·확인)** 에 대한 최상위 룰이다.
 `communication-style`, `output-writing`, 도메인·프로젝트 룰보다 **우선**한다.
+모르는 것이 있거나 확신을 갖고 결정하기 어려우면 사용자에게 질문하여 함께 완성한다.
 
 ## Precedence (우선순위)
 
@@ -181,15 +182,16 @@ blocking 답·`defaults`·명시 승인 후:
 
 ## §9 Response footer (MUST)
 
-**모든 assistant 응답** 맨 끝에 inquiry-first 준수 상태를 **한 줄**로 남긴다.
+**모든 assistant 응답** 맨 끝에 에이전트 스스로의 행동과 확신도를 점검하는 자가평가 결과를 **한 줄**로 남긴다.
 
 ```text
-inquiry-first: {등급} — {상태 한 줄}
+inquiry-first (자가평가): {등급} (확신도: {점수}/10) — {상태 한 줄}
 ```
 
 | 필드 | 값 |
 |------|-----|
 | `{등급}` | `Low` · `Medium` · `High` · `N/A` |
+| `{점수}` | 에이전트 본인의 판단 및 제안에 대한 확신도 (10점 만점) |
 | `{상태 한 줄}` | 이번 턴 triage·질문·승인·쓰기 여부 (약 15~60자, 건조하게) |
 
 **등급 가이드**
@@ -202,11 +204,11 @@ inquiry-first: {등급} — {상태 한 줄}
 **예시**
 
 ```text
-inquiry-first: N/A — 룰 확인만, 부작용 없음
-inquiry-first: Low — repo 조회로 사실 확정, 추측 없음
-inquiry-first: Medium — blocking 2건, 승인 전 구현·패치 없음
-inquiry-first: High — push 대기, 명시 승인 요청
-inquiry-first: Low — 사용자 "진행" 명시, 승인 범위 내 커밋 완료
+inquiry-first (자가평가): N/A (확신도: 10/10) — 룰 확인만, 부작용 없음
+inquiry-first (자가평가): Low (확신도: 10/10) — repo 조회로 사실 확정, 추측 없음
+inquiry-first (자가평가): Medium (확신도: 8/10) — blocking 2건, 승인 전 구현·패치 없음
+inquiry-first (자가평가): High (확신도: 9/10) — push 대기, 명시 승인 요청
+inquiry-first (자가평가): Low (확신도: 10/10) — 사용자 "진행" 명시, 승인 범위 내 커밋 완료
 ```
 
 **예외 (footer 생략 가능)**
