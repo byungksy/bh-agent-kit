@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+
+if [ "$#" -ne 1 ]; then
+    echo "Usage: bh-gif <video_file>"
+    exit 1
+fi
+
+INPUT="$1"
+
+if [ ! -f "$INPUT" ]; then
+    echo "Error: File '$INPUT' does not exist."
+    exit 1
+fi
+
+# Extract filename and extension
+BASENAME=$(basename "$INPUT")
+NAME="${BASENAME%.*}"
+DIR=$(dirname "$INPUT")
+OUTPUT="$DIR/$NAME.gif"
+
+echo "Converting $INPUT to $OUTPUT..."
+
+# 1. Extract frames
+mkdir -p /tmp/bh-gif-frames
+rm -f /tmp/bh-gif-frames/frame*.png
+ffmpeg -i "$INPUT" /tmp/bh-gif-frames/frame%04d.png -hide_banner -loglevel error
+
+# 2. Convert to gif
+gifski -o "$OUTPUT" /tmp/bh-gif-frames/frame*.png --fps 20 --quiet
+
+# 3. Cleanup
+rm -rf /tmp/bh-gif-frames
+
+echo "Done! Output: $OUTPUT"
