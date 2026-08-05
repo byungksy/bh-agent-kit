@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [],
+    "beforeShellExecution": [
+      {
+        "command": "~/.agents/hooks/block-unsafe-git.sh",
+        "matcher": "git",
+        "timeout": 3
+      },
+      {
+        "command": "~/.agents/hooks/guard-git-conventions.sh",
+        "matcher": "git",
+        "timeout": 3
+      },
+      {
+        "command": "~/.agents/hooks/warn-checkout-untracked-before.sh",
+        "matcher": "git",
+        "timeout": 3
+      }
+    ],
+    "afterShellExecution": [
+      {
+        "command": "~/.agents/hooks/guard-merge-conflict.sh",
+        "matcher": "git",
+        "timeout": 3
+      },
+      {
+        "command": "~/.agents/hooks/warn-commit-issue-dup.sh",
+        "matcher": "git",
+        "timeout": 3
+      },
+      {
+        "command": "~/.agents/hooks/warn-post-pr.sh",
+        "matcher": "git",
+        "timeout": 3
+      },
+      {
+        "command": "~/.agents/hooks/warn-checkout-untracked-after.sh",
+        "matcher": "git",
+        "timeout": 3
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": "~/.agents/hooks/lint-after-edit.sh",
+        "timeout": 3
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "~/.agents/hooks/audit-skill-use.sh",
+        "matcher": "Read",
+        "timeout": 3
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "~/.agents/hooks/inject-qmd-search.sh",
+        "timeout": 5
+      },
+      {
+        "command": "~/.agents/hooks/idle-grill-me-start.sh",
+        "timeout": 5
+      }
+    ],
+    "preCompact": [
+      {
+        "command": "~/.agents/hooks/auto-checkpoint-precompact.sh",
+        "timeout": 5
+      }
+    ],
+    "sessionStart": [
+      {
+        "command": "~/.agents/hooks/audit-session.sh",
+        "timeout": 5
+      }
+    ],
+    "stop": [
+      {
+        "command": "~/.agents/hooks/notify-stop.sh",
+        "timeout": 5
+      },
+      {
+        "command": "~/.agents/hooks/idle-grill-me-stop.sh",
+        "timeout": 5
+      }
+    ]
+  }
+}

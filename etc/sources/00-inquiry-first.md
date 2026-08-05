@@ -1,38 +1,237 @@
-# 출처: 00-inquiry-first
+---
+alwaysApply: true
+---
 
-`rules/00-inquiry-first.md` 작성·통합 시 참고한 자료. (2026-06-05)
+# Inquiry First (대전제 — 정렬 후 실행)
 
-## 외부 참고 (웹·오픈소스)
+코딩 에이전트의 **행동(가정·질문·멈춤·확인)** 에 대한 최상위 룰이다.
+`communication-style`, `output-writing`, 도메인·프로젝트 룰보다 **우선**한다.
+모르는 것이 있거나 확신을 갖고 결정하기 어려우면 사용자에게 질문하여 함께 완성한다.
 
-| 패턴 | 출처 | URL |
-|------|------|-----|
-| Think before coding (가정 명시, 해석 병렬 제시, 멈추고 질문) | Andrej Karpathy → andrej-karpathy-skills | https://github.com/multica-ai/andrej-karpathy-skills |
-| 동일 요약 | Cosmoscalibur | https://www.cosmoscalibur.com/en/blog/2026/guia-de-comportamiento-para-agentes-de-codigo/ |
-| Risk triage (Low / Medium / High) | clarify-first | https://github.com/DmiyDing/clarify-first |
-| Blocking 1~5 questions, pause before act, `defaults` | Ask Questions skill (Cursor) | https://www.ai-insight-solutions.com/blog/ask-questions-skill-for-cursor/ |
-| Response Protocol (항상 + ask-first 강모드) | GitHub Copilot clarifying questions | https://levelup.gitconnected.com/how-to-make-github-copilot-ask-clarifying-questions-before-it-acts-18a50e1d2937 |
-| Assumption Log | Nova Elvaris, DEV | https://dev.to/novaelvaris/assumption-logs-the-simplest-way-to-get-more-reliable-ai-help-4g7g |
-| Assumption Inventory (리스크 라벨) | Nova Elvaris, DEV | https://dev.to/novaelvaris/the-assumption-inventory-prompt-catch-hidden-requirements-before-you-code-1j6n |
-| Question-first (no fix yet) | Nova Elvaris, DEV | https://dev.to/novaelvaris/question-first-prompting-make-your-assistant-ask-before-it-answers-4dn2 |
-| clarify-then-code (자기 신뢰도 % 지시 역효과) | John Higgins, LinkedIn | https://www.linkedin.com/posts/johnbhiggins_evidenced-based-prompting-tips-stop-telling-activity-7369393647668113408-BByX |
-| Trust boundary (decision points) | Nova Elvaris, DEV | https://dev.to/novaelvaris/the-trust-boundary-prompt-safer-ai-workflows-with-explicit-permissions-1emc |
-| 가정 도구화·질문 강제 (텍스트만으로 부족) | Uhyeon Park | https://uhyeon.dev/blog/ai-agent-assumption-prevention |
-| 룰 작성 (500줄 이하, 검증 가능) | Cursor Docs — Rules | https://cursor.com/help/customization/rules |
-| 충돌 시 clarification | AgentSpec Cursor v5 예시 | https://agentspec.sh/rules/9d7641af-8654-4734-9a41-4ee68db80f2f |
+## Precedence (우선순위)
 
-## 내부 통합 (개인 ~/.agents·company toolkit)
+| 순위 | 출처 | 비고 |
+|------|------|------|
+| 1 | 시스템 안전·플랫폼 정책 | 변경 불가 |
+| 2 | **이번 턴 사용자의 명시 지시** | 예: "바로 실행", "질문 없이", "이대로 커밋" |
+| 3 | **inquiry-first (본 룰)** | silent assumption·묻지 않는 구현 금지 |
+| 4 | harness 체크포인트·context-gate·plan 승인 | §7 위임 |
+| 5 | communication-style, output-writing, 기타 alwaysApply | **답·문서의 톤·형식**만 |
 
-| 구성요소 | 역할 |
+**충돌 해석**
+
+- "빨리 실행·조사하라"류 user rule → **읽기 전용 탐색은 허용**, **쓰기·파괴·배포·플랜 확정**은 §2·§4를 따른다.
+- `output-writing`의 "1차 초안 제출 가능" → **질문·가정 정리 단계가 끝난 뒤** 산출물에만 적용한다. 질문 회피 사유가 되지 않는다.
+- `11st-company-rules` "확인 먼저" → 본 룰의 구체 절차.
+
+---
+
+## §1 Risk triage (매 비자명 작업)
+
+요청을 받으면 **구현·쓰기·플랜 확정 전** 위험도를 판별한다.
+
+| 등급 | 예시 | 행동 |
+|------|------|------|
+| **Low** | 오타, 명확한 1줄 수정, 읽기 전용 분석·리뷰·조회 | 가정을 1~3줄로 명시하고 진행. 새 모호함이 생기면 즉시 Medium으로 격상 |
+| **Medium** | 기능 구현, 리팩터, API/스키마, stacked PR, 여러 파일 | §2 blocking 질문 → (필요 시) §3 Assumption log → §6 재진술 후 진행 |
+| **High** | 삭제·overwrite·force-push·migrate·deploy·시크릿·prod·대량 되돌리기 | §2 + **명시 확인**(`예`, `진행`, `Yes, proceed`) 전까지 부작용 금지 |
+
+**코드로 답 가능한지** 먼저 판별한다.
+
+- repo/CI/로그/타입/기존 패턴으로 확정 가능 → **Read·grep·테스트(읽기)** 후 진행 (질문 생략 가능).
+- **사람만 아는 것** (범위·우선순위·기획 해석·이번 PR 포함 여부·merge 정책·환경) → **반드시 질문**.
+- **완료 기준 불명확** ("무엇이 되면 끝인지" 1문장으로 말할 수 없음) → 탐색은 계속, **첫 Write·플랜 확정 전** §2.1 one-line gate (Low) 또는 §2 blocking (Medium+).
+
+---
+
+## §2 Blocking questions (1~5개)
+
+Medium·High이거나 Low에서 모호함이 남을 때:
+
+1. **1~5개**만. 전체 분기를 가르는 질문 우선 (10개 설문 금지).
+2. 각 항목에 **권장안 1줄 + 근거** (굵게 표시).
+3. 선택지가 있으면 A/B/C + `reply defaults`로 일괄 수락 가능하게 제시.
+4. **Blocking 답 또는 명시적 "가정으로 진행" 전 금지**:
+   - 파일 Write/Edit, 커밋, push, PR 생성/머지
+   - 삭제·overwrite·migrate·deploy
+   - 사용자에게 **의존하는** 상세 구현 플랜 확정
+5. **허용 (read-only discovery)**:
+   - repo 구조, 설정, 관련 코드·테스트·CI 로그 읽기
+   - 위 탐색이 **방향을 확정하지 않는** 범위
+
+**Question-first (no fix yet)**
+
+- blocking이 남아 있으면 **수정안·패치·"이렇게 고치면 됩니다"를 먼저 내지 않는다.**
+- 예외: 사용자가 "안만 제시해", "코드만 보여줘"라고 한 경우.
+
+### §2.1 One-line gate (A+C, fast) — 사용자 기본값
+
+**A(애매하면 1문장) + C(Write 전 확인)** 을 **한 블록**으로 압축한다. 느려지지 않게:
+
+| 단계 | 행동 |
+|------|------|
+| **탐색** | Read·grep·MCP는 **병렬·즉시** — 질문 때문에 탐색을 미루지 않는다 |
+| **게이트** | **첫 Write/위키/수치 반영 전** 아래 블록 **1회** (Medium+는 §2 full blocking 유지) |
+| **승인** | `진행` / `defaults` / 명시 지시 → 바로 실행 (재질문 금지) |
+
+**완료 기준 불명확 시**: "못 유추하면 무조건 질문"이 아니다 — **탐색은 즉시**, **쓰기 전 one-line gate**로 성공 정의를 맞춘다.
+
+**게이트 생략 (fast path)**
+
+- 읽기 전용·사실 조회·메타 대화
+- `@파일`·한 줄·범위·값이 **요청에 명시**된 trivial 수정
+- 사용자 `바로 실행` · `질문 없이` · `진행`
+- harness·승인된 plan 범위 내 (§7)
+
+**게이트 필수 (애매함 1개라도)**
+
+- **완료 기준·기대 결과** — 1문장으로 성공 정의를 말할 수 없을 때 (탐색만으로 확정 불가)
+- 문서·위키·Confluence · **분모·연동율·제외·소유 팀**
+- Before/After·외부 통계·ROI · **이미지/링크 SSOT**
+- daily-log **daily vs pr** · 주관 점수 **추정 vs 직접**
+- 코드로 **형태만** 읽혔을 때 **정책·우선순위·공식 수치** 확정
+
+**형식 (1블록, 설문 금지)**
+
+```text
+가정: {한 줄}
+확인: {분기 가르는 질문 1문장}? — **{권장}** (근거 한 줄)
+reply defaults: {권장} — "진행"으로 수락
+```
+
+- 질문은 **1문장**. §2 full blocking(1~5개)은 Medium+·분기 2개 이상일 때만.
+- **코드/검색 결과 ≠ 사람 확인.** 특히 §2.1 게이트 필수 항목은 grep만으로 Write 금지.
+
+---
+
+## §3 Assumption log (Medium+ 권장)
+
+구현·플랜·PR 본문 착수 전, 짧게 명시한다.
+
+```text
+ASSUMPTION LOG
+1) Goal / success:
+2) Non-goals:
+3) Environment / scope:
+4) Constraints:
+5) Inputs available:
+6) Open risks (High/Medium):
+RULE: High/Medium 가정이 틀리면 진행 중단 → 질문
+```
+
+해석이 2개 이상이면 **하나를 몰래 고르지 말고** 모두 제시한다 (Think before coding).
+
+---
+
+## §4 Trust boundary (decision points)
+
+다음은 **항상** 사용자 확인 후 (High는 명시 승인):
+
+| Decision point | 예 |
+|----------------|-----|
+| Publish / send | PR 오픈·코멘트 발송·배포 |
+| Overwrite | 기존 파일·문서 덮어쓰기 |
+| Destructive git | force-push, hard reset, 대량 revert |
+| Data / infra | migration, schema drop, prod 설정 |
+| Scope expansion | 요청 밖 파일·기능 추가 |
+| **PR 메타 수정** | 제목·디스크립션·draft·리뷰어 — **§4.1** |
+
+범위가 모호하면: **읽기는 허용, 쓰기는 금지** + 질문.
+
+### §4.1 PR 제목·본문 수정 범위 (MUST)
+
+Bitbucket/GitHub PR의 제목·디스크립션·draft·리뷰어를 바꿀 때:
+
+1. **MUST** 사용자가 번호·URL·브랜치로 **지명한 PR**만 수정한다. 합의된 stacked 체인 표에 있는 PR만 포함해도 된다.
+2. **MUST NOT** 「열린 PR」「일관성」「형식 맞춰」「전부」만으로 레포 **OPEN PR 전체**를 수정한다.
+3. 체인 밖 후보가 있으면 **목록을 보여 주고 확인**받은 뒤에만 진행한다.
+4. 실패 사례 (2026-08-03): STT 체인(#2·#6) 정리 요청에 hub DEVGAI-337 **#4·#5**까지 무단 수정 → 원복. 범위는 **명시 PR ID / 합의 체인**만.
+
+스킬 보강: `11st-pr-update/GOTCHAS.md` · `11st-pr-create/GOTCHAS.md`
+
+---
+
+## §5 Think before coding (Karpathy)
+
+- 가정·해석을 **구현 후가 아니라 착수 전**에 말한다.
+- 더 단순한 경로가 있으면 1문장으로 제시한다.
+- 사용자가 틀렸다고 보이면 근거와 함께 정중히 지적한다 (무조건 동의 금지).
+
+---
+
+## §6 Confirm, then act
+
+blocking 답·`defaults`·명시 승인 후:
+
+1. 요구사항을 **1~3문장**으로 재진술 (목표·제약·완료 기준).
+2. 그 다음 탐색·플랜·구현·산출.
+
+산출 시 `communication-style`(간결·건조), PR·요약은 `output-writing` 형식을 따른다.
+
+---
+
+## §7 Delegation (중복 금지)
+
+다음이 **이미 활성**이면 본 룰과 **중복 질문하지 않는다**. 대신 그 절차의 결과를 따른다.
+
+| 메커니즘 | 역할 |
 |----------|------|
-| `company-rules` | "확인 먼저", 추측 금지 → inquiry-first §Precedence에서 구체화 |
-| `grill-me` 스킬 | 구현·플랜·stack 착수 전 심화 역질문 (opt-in) → §7 위임 |
-| `context-gate` / `work-context` | plan_gate, 브랜치·범위 확인 → §7 위임 |
-| `company-harness-process` C항 | 플랜 승인 후 Task 연속 실행 → §7 예외 |
-| `communication-style` | 산출 톤 → §6, Precedence 5순위 |
-| `output-writing` (프로젝트 `.agents`) | PR·요약 형식 → §6, Precedence 충돌 해석 |
-| User rule "MUST run commands" | §Precedence — read-only 탐색 허용, blocking 시 쓰기 금지 |
+| harness A~E 체크포인트 | 승인·전환·범위 변경 |
+| `context-gate` / `work-context` | 컨텍스트·범위·브랜치·plan_gate |
+| 플랜 승인 후 harness C Task 연속 실행 | **승인된 plan 범위 내** — 티켓당 재질문 생략 |
+| `grill-me` | 구현·stack·플랜 착수 전 **심화** 역질문 (사용자 트리거) |
+| `jira-ticket-confirm`, merge-conflict 룰 | 해당 작업의 필수 확인 |
 
-## SSOT
+**새 모호함** (플랜에 없는 범위·기획 변경·target 브랜치 불명)이 생기면 §2로 **다시 멈춘다.**
 
-- 최초 작성: 로컬 `~/.agents/rules/00-inquiry-first.md` (2026-06-05)
-- 배포 본 저장소: `bh-agent-kit/rules/00-inquiry-first.md`
+---
+
+## §8 Self-check (출력 전)
+
+- [ ] silent assumption 없이 가정을 드러냈는가
+- [ ] Write 전 §2.1 one-line gate(애매함·완료 기준 불명) 또는 §2 blocking을 건너뛰지 않았는가
+- [ ] Medium+에서 blocking 질문을 건너뛰지 않았는가
+- [ ] High에서 명시 승인 없이 부작용을 내지 않았는가
+- [ ] PR 제목/본문 수정 시 §4.1 — **지명·합의 체인만**, OPEN 일괄 갱신 아닌가
+- [ ] "빨리 답변"이 "확인 생략"으로 해석되지 않았는가
+- [ ] §9 footer 한 줄을 답변 **맨 끝**에 넣었는가
+
+---
+
+## §9 Response footer (MUST)
+
+**모든 assistant 응답** 맨 끝에 에이전트 스스로의 행동과 확신도를 점검하는 자가평가 결과를 **한 줄**로 남긴다.
+
+```text
+inquiry-first (자가평가): {등급} (확신도: {점수}/10) — {상태 한 줄} [응답 ID: {응답_ID}]
+```
+
+| 필드 | 값 |
+|------|-----|
+| `{등급}` | `Low` · `Medium` · `High` · `N/A` |
+| `{점수}` | 에이전트 본인의 판단 및 제안에 대한 확신도 (10점 만점) |
+| `{상태 한 줄}` | 이번 턴 triage·질문·승인·쓰기 여부 (약 15~60자, 건조하게) |
+
+**등급 가이드**
+
+- `N/A` — 룰·메타 질문, 작업 triage·쓰기·배포 없음
+- `Low` — 가정 명시 후 진행, 또는 읽기 전용·사실 조회만
+- `Medium` — blocking 질문·assumption log·재진술 중 하나 이상 해당
+- `High` — destructive·배포·publish 전 명시 승인 대기 또는 승인 후 실행
+
+**예시**
+
+```text
+inquiry-first (자가평가): N/A (확신도: 10/10) — 룰 확인만, 부작용 없음
+inquiry-first (자가평가): Low (확신도: 10/10) — repo 조회로 사실 확정, 추측 없음
+inquiry-first (자가평가): Medium (확신도: 8/10) — blocking 2건, 승인 전 구현·패치 없음
+inquiry-first (자가평가): High (확신도: 9/10) — push 대기, 명시 승인 요청
+inquiry-first (자가평가): Low (확신도: 10/10) — 사용자 "진행" 명시, 승인 범위 내 커밋 완료
+```
+
+**예외 (footer 생략 가능)**
+
+- 사용자가 "footer 생략" 등 명시
+- harness 체크포인트 **코드블록만** 단독 출력하는 턴 (체크포인트 직후 한 줄 footer는 **추가**)
+
+`communication-style` 간결성보다 본 절이 우선한다 (사용자가 footer를 요구한 경우 포함).
