@@ -6,4 +6,4 @@
 
 ## 핵심 참고 파일
 * 규칙 정의: `rules/bh-token-lookup.md`
-* 샘플 템플릿: `etc/secret-tokens.example.json`
+

@@ -71,8 +71,7 @@ chmod 600 ~/.secret/tokens.json
 - **MUST**: 위 탐색 순서대로 조회하고 첫 번째로 유효한 값을 사용한다.
 - **MUST**: 신규 키는 `~/.secret/tokens.json`에 추가하여 단일 관리한다 (임의의 새 파일/경로 생성 금지).
 - **MUST**: 로컬 파일 생성 시 `chmod 700 ~/.secret`, `chmod 600 ~/.secret/tokens.json` 적용.
-- **MUST NOT (절대 금지)**: **실제 토큰/비밀번호/시크릿 값을 코드, 리포지토리(git commit/push), PR, 로그, 에러 메시지에 노출하지 않는다.**
-- **MUST NOT**: 리포지토리에는 오직 더미/플레이스홀더가 포함된 템플릿 샘플 파일(`etc/secret-tokens.example.json`)만 커밋/푸시를 허용한다.
+- **MUST NOT (절대 금지)**: **어떠한 경우에도 실제 토큰/비밀번호/시크릿 값을 코드, 리포지토리(git commit/push), PR, 로그, 에러 메시지에 노출하지 않는다.**
 
 ---
 
@@ -90,8 +89,3 @@ chmod 600 ~/.secret/tokens.json
 | `CURSOR_API_KEY` | Cursor Enterprise / Dashboard Analytics API | `~/.secret/tokens.json` |
 | Cursor Access Token | Cursor 로컬 개인 사용량 조회 | `state.vscdb` (SQLite) |
 
----
-
-## 템플릿 샘플 파일
-
-* 샘플 템플릿 경로: [`etc/secret-tokens.example.json`](../etc/secret-tokens.example.json)
