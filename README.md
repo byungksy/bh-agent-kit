@@ -10,14 +10,17 @@
 | `rules-meta.json` | 룰별 `alwaysApply`·`description` (Cursor frontmatter 생성용) |
 | `skills/` | 온디맨드 스킬 (`*/SKILL.md`) |
 | `hooks/` | Cursor 훅 스크립트 (`*.sh`). `~/.cursor/hooks/`로 복사 후 `~/.cursor/hooks.json`에 등록 |
-| `scripts/` | 로컬 및 에이전트 유틸리티 스크립트 (`bh-alert`, `bh-cli-export` 등) |
+| `scripts/` | 로컬 및 에이전트 유틸리티 스크립트 (`bh-alert`, `bh-cli-export`, `bh-create-pr` 등) |
+| `docs/agent-compatibility.md` | 에이전트별 호환성 매트릭스 및 다중 에이전트 연동 가이드 |
+| `docs/kiro-porting.md` | Kiro CLI 포팅 및 심볼릭 링크 연동 상세 가이드 |
 | `etc/mac-setup.md` | 작업 PC 필수 소프트웨어 구성 및 가이드 (SSOT) |
 | `etc/bh-onboarding.md` | 로컬 복습용 온보딩 가이드 문서 |
 | `etc/sources/` | 각 룰·스킬의 출처·참고 링크·내부 통합 메모 |
 
 
-## 설치 예시
+## 설치 및 동기화
 
+### 1. ~/.agents SSOT 동기화 (Cursor / Claude / Codex)
 ```bash
 # ~/.agents SSOT에 반영
 cp rules/*.md ~/.agents/rules/
@@ -26,10 +29,7 @@ cp -R skills/* ~/.agents/skills/             # 스킬 추가·갱신
 bash ~/.agents/scripts/sync-to-agents.sh --full
 ```
 
-## Kiro CLI 포팅
-
-rules → `~/.kiro/steering/`, skills → `~/.kiro/skills/`, hooks → agent JSON `hooks` 필드로 연동한다.
-
+### 2. Kiro CLI 동기화 (심볼릭 링크)
 ```bash
 # rules 심볼릭 링크
 for f in ~/bh-agent-kit/rules/*.md; do
@@ -42,9 +42,19 @@ for d in ~/bh-agent-kit/skills/*/; do
 done
 ```
 
-상세 가이드: [`docs/kiro-porting.md`](docs/kiro-porting.md)
+## 에이전트 호환성
 
-`00-inquiry-first.md`는 파일명 순으로 Codex `AGENTS.md` 맨 위에 오도록 `00-` 접두어를 유지한다.
+`bh-agent-kit`은 Cursor, Kiro CLI, Antigravity, Claude Code, Codex 등 다양한 에이전트를 공용 지원합니다.
+
+| 에이전트 | 규칙(Rules) 로드 방식 | 스킬(Skills) 연동 | CLI 도구 실행 |
+| :--- | :--- | :--- | :--- |
+| **Cursor IDE** | `~/.cursor/rules/*.mdc` (frontmatter 변환) | `skills/*/SKILL.md` (MCP/Subagent) | 터미널 bash |
+| **Kiro CLI** | `~/.kiro/steering/*.md` (심볼릭 링크) | `~/.kiro/skills/*/SKILL.md` | bash 도구 |
+| **Antigravity** | `~/.gemini/config/rules/*.md` | `~/.gemini/config/skills/` | `run_command` |
+| **Claude / Codex** | `AGENTS.md` / `~/.agents/` | Slash Commands | bash 도구 |
+
+- 상세 가이드: [`docs/agent-compatibility.md`](docs/agent-compatibility.md) / [`docs/kiro-porting.md`](docs/kiro-porting.md)
+- `00-inquiry-first.md`는 파일명 순으로 Codex `AGENTS.md` 맨 위에 오도록 `00-` 접두어를 유지한다.
 
 ## 룰 목록
 
