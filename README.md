@@ -56,6 +56,7 @@ done
 | `output-writing.md` | false (PR 작성 시 Read) | PR 디스크립션 — 기획/작업/리뷰기한(`-`), 목적 우선·짧은 문장 |
 | `bh-token-lookup.md` | false (토큰 필요 시 Read) | 인증 토큰 탐색 순서 SSOT — Cursor accessToken vs Analytics API Key, credentials.env / mcp.json / Keychain 순회 |
 | `bh-ticket-maker.md` | false (티켓 생성 시 Read) | Jira 티켓 생성 CLI(`bh-ticket-maker`) 사용 지침 — 기본 프로젝트 COMPANY, 결함 유형, 담당자, 시작일·종료일 미지원 |
+| `bh-create-pr.md` | false (PR 생성 시 Read) | Bitbucket PR 생성 CLI(`bh-create-pr`) 사용 지침 — 하이브리드 연동, Bugfix 3대 필수 섹션, Bitbucket markdown 규칙 |
 
 ## 스킬 목록
 
@@ -90,5 +91,7 @@ chmod +x ~/.cursor/hooks/*.sh
 |------|------|
 | `scripts/bh-alert` | macOS 시스템 알림 팝업 및 Slack DM을 전송하는 범용 알림 헬퍼 |
 | `scripts/bh-cli-export` | CLI 출력 결과를 HTML(컬러 보존) 또는 ASCII(시퀀스 제거) 텍스트 파일로 내보내기 |
+| `scripts/bh-ticket-maker` | Jira(Server/DC)에 이슈 티켓을 대화형 또는 CLI 옵션으로 손쉽게 생성하는 도구 |
+| `scripts/bh-create-pr` | Git diff 및 Jira 기반 AI 에이전트 PR 설명 작성 및 Bitbucket PR 생성 CLI (하이브리드 모드 지원) |
 
 출처는 `etc/sources/` 참고.

@@ -1,0 +1,1088 @@
+#!/usr/bin/env bash
+
+# ── bh-create-pr ──────────────────────────────────────────────────────────────
+# 코드 변경 사항(git diff)과 Jira 티켓 정보를 기반으로 AI 에이전트를 구동하거나,
+# 대화 중인 에이전트(하이브리드 모드)가 작성한 내용을 받아 Bitbucket PR을 생성하는 CLI 도구.
+#
+# 주요 정책:
+#   - 하이브리드 모드 지원:
+#       1) --context: Git/Jira 컨텍스트를 JSON으로 출력 (에이전트가 사전 조회)
+#       2) -s <제목> -d <본문> / -f <파일> / stdin: 에이전트가 완성한 PR 내용을 주입
+#       3) 자동 생성: 본문 미입력 시 내장 agy(AI 에이전트)가 자동 작성
+#   - bugfix, hotfix: "이슈현상*", "발생 원인*", "해결방법*" 필수 작성 및 검증
+#   - feature/task: "기획내용*", "작업내용*", "서비스 영향범위*" 표준 템플릿
+#   - Bitbucket Markdown: 블록 요소 간 \n\n 빈 줄 자동 정규화
+# ──────────────────────────────────────────────────────────────────────────────
+
+set -euo pipefail
+
+# ── 색상 정의 ──────────────────────────────────────────────────────────────────
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
+BLUE='\033[0;34m'
+BOLD='\033[1m'
+DIM='\033[2m'
+RESET='\033[0m'
+
+# ── 기본 변수 ──────────────────────────────────────────────────────────────────
+BASE_BRANCH=""
+EXPLICIT_TICKET=""
+FORCE_MODE=""  # bugfix | feature | ""
+DO_CREATE=0
+IS_DRAFT=0
+OPEN_BROWSER=0
+ENGINE="agy"
+DRY_RUN=0
+CONFIRM=1
+
+CUSTOM_TITLE=""
+CUSTOM_DESC=""
+DESC_FILE=""
+OUTPUT_CONTEXT=0
+QUIET=0
+STRICT=0
+
+# ── 로깅 유틸 (stderr 출력으로 stdout 데이터 오염 방지) ─────────────────────────
+info()    { [[ $QUIET -eq 0 && $OUTPUT_CONTEXT -eq 0 ]] && echo -e "${CYAN}▶${RESET} $*" >&2 || true; }
+success() { [[ $QUIET -eq 0 && $OUTPUT_CONTEXT -eq 0 ]] && echo -e "${GREEN}✔${RESET} $*" >&2 || true; }
+warn()    { [[ $QUIET -eq 0 ]] && echo -e "${YELLOW}⚠${RESET}  $*" >&2 || true; }
+error()   { echo -e "${RED}✖${RESET}  $*" >&2; }
+die()     { error "$*"; exit 1; }
+
+# ── 도움말 ────────────────────────────────────────────────────────────────────
+usage() {
+  cat << 'EOF'
+사용법:
+  bh-create-pr [옵션]
+
+옵션:
+  -s, --title, --summary <TEXT>   PR 제목 직접 지정 (하이브리드 모드)
+  -d, --desc, --description <TEXT> PR 본문(설명) 직접 지정 (하이브리드 모드)
+  -f, --file <PATH>               PR 본문 파일 경로 지정
+      --context                   Git 및 Jira 컨텍스트를 JSON으로 출력하고 종료 (에이전트 연동용)
+
+  -b, --base <BRANCH>             타겟 베이스 브랜치 (기본값: develop 또는 main/master 자동 감지)
+  -t, --ticket <KEY>              연결할 Jira 티켓 키 (기본값: 브랜치명/커밋에서 자동 감지)
+      --bugfix, --hotfix          Bugfix/Hotfix 모드 강제 적용 (이슈현상/원인/해결방법 필수)
+      --feat, --feature           Feature/Task 모드 강제 적용 (기획내용/작업내용)
+
+  -c, --create                    생성된 설명으로 Bitbucket PR 즉시 생성 (API)
+      --draft                     PR 제목에 [DRAFT] 접두어 추가
+  -o, --open                      완료 후 브라우저에서 PR 열기
+      --engine <NAME>             AI 엔진 (agy [기본값], cursor, direct)
+      --dry-run                   실제 PR 생성 없이 에이전트 설명 생성 및 프리뷰만 수행
+
+      --strict                    Bugfix 모드 필수 섹션 누락 시 에러로 중단
+      --force                     검증 경고를 무시하고 진행
+  -q, --quiet                     진행 로그 억제 (stdout JSON 파싱 시 유용)
+  -y, --yes                       대화형 확인 프롬프트 건너뛰기
+  -h, --help                      도움말 출력
+
+하이브리드(에이전트 연동) 워크플로우:
+  1. 컨텍스트 수집:  bh-create-pr --context
+  2. 에이전트 PR생성: bh-create-pr -s "[TICKET-123] 제목" -d "## 이슈현상* ..." -c
+  3. 파이프 전달:    cat pr_body.md | bh-create-pr -s "[TICKET-123] 제목" -c
+EOF
+  exit 0
+}
+
+# ── 인자 파싱 ──────────────────────────────────────────────────────────────────
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -s|--title|--summary)
+      CUSTOM_TITLE="$2"; shift 2 ;;
+    -d|--desc|--description)
+      CUSTOM_DESC="$2"; shift 2 ;;
+    -f|--file)
+      DESC_FILE="$2"; shift 2 ;;
+    --context)
+      OUTPUT_CONTEXT=1; shift ;;
+    -b|--base)
+      BASE_BRANCH="$2"; shift 2 ;;
+    -t|--ticket)
+      EXPLICIT_TICKET=$(echo "$2" | tr '[:lower:]' '[:upper:]'); shift 2 ;;
+    --bugfix|--hotfix)
+      FORCE_MODE="bugfix"; shift ;;
+    --feat|--feature)
+      FORCE_MODE="feature"; shift ;;
+    -c|--create)
+      DO_CREATE=1; shift ;;
+    --draft)
+      IS_DRAFT=1; shift ;;
+    -o|--open)
+      OPEN_BROWSER=1; shift ;;
+    --engine)
+      ENGINE="$2"; shift 2 ;;
+    --dry-run)
+      DRY_RUN=1; shift ;;
+    --strict)
+      STRICT=1; shift ;;
+    --force)
+      STRICT=0; shift ;;
+    -q|--quiet)
+      QUIET=1; shift ;;
+    -y|--yes)
+      CONFIRM=0; shift ;;
+    -h|--help)
+      usage ;;
+    *)
+      error "알 수 없는 옵션: $1"
+      usage ;;
+  esac
+done
+
+# ── Git 저장소 검증 ──────────────────────────────────────────────────────────
+_check_git_repo() {
+  if ! git rev-parse --is-inside-work-tree &>/dev/null; then
+    die "현재 디렉토리는 Git 저장소가 아닙니다."
+  fi
+
+  CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || true)
+  if [[ -z "$CURRENT_BRANCH" ]]; then
+    # CI나 detached HEAD인 경우 커밋 해시 fallback
+    CURRENT_BRANCH=$(git rev-parse --short HEAD 2>/dev/null || true)
+    if [[ -z "$CURRENT_BRANCH" ]]; then
+      die "현재 브랜치를 확인할 수 없습니다."
+    fi
+  fi
+
+  # 원격 저장소 정보
+  ORIGIN_URL=$(git remote get-url origin 2>/dev/null || true)
+  if [[ -z "$ORIGIN_URL" ]]; then
+    die "Git 원격 저장소(origin)를 찾을 수 없습니다."
+  fi
+
+  # Bitbucket workspace / repo 파싱
+  local parsed_repo
+  parsed_repo=$(python3 - << 'PYEOF' "$ORIGIN_URL"
+import re, sys
+url = sys.argv[1]
+m = re.search(r'bitbucket\.org[:/]([^/:]+)/([^/.]+?)(?:\.git)?$', url)
+if m:
+    print(f"{m.group(1)}|{m.group(2)}")
+else:
+    print("|")
+PYEOF
+)
+  BB_WORKSPACE=$(echo "$parsed_repo" | cut -d'|' -f1)
+  BB_REPO=$(echo "$parsed_repo" | cut -d'|' -f2)
+}
+
+# ── 베이스 브랜치 결정 ────────────────────────────────────────────────────────
+_resolve_base_branch() {
+  if [[ -n "$BASE_BRANCH" ]]; then
+    return
+  fi
+
+  # 1. 원격 저장소의 실제 기본 브랜치(origin/HEAD) 감지 (e.g. main)
+  local default_head
+  default_head=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@' || true)
+  if [[ -n "$default_head" && "$CURRENT_BRANCH" != "$default_head" ]]; then
+    if git rev-parse --verify "origin/${default_head}" &>/dev/null; then
+      BASE_BRANCH="$default_head"
+      return
+    fi
+  fi
+
+  # 2. 후보 브랜치 탐색 (main 최우선)
+  local candidates=("main" "master" "develop" "dev")
+  for cand in "${candidates[@]}"; do
+    if git rev-parse --verify "origin/${cand}" &>/dev/null; then
+      if [[ "$CURRENT_BRANCH" != "$cand" ]]; then
+        BASE_BRANCH="$cand"
+        break
+      fi
+    fi
+  done
+
+  if [[ -z "$BASE_BRANCH" ]]; then
+    BASE_BRANCH="main"
+  fi
+
+  if [[ "$CURRENT_BRANCH" == "$BASE_BRANCH" ]]; then
+    warn "현재 브랜치('${CURRENT_BRANCH}')가 타겟 베이스 브랜치와 동일합니다."
+    if [[ $CONFIRM -eq 1 && $OUTPUT_CONTEXT -eq 0 ]]; then
+      echo -ne "${CYAN}▶${RESET} 비교할 베이스 브랜치를 입력하세요 (예: develop, main): " >&2
+      local input_base=""
+      if [[ -r /dev/tty ]]; then
+        read -r input_base < /dev/tty || true
+      elif [[ -t 0 ]]; then
+        read -r input_base || true
+      fi
+      input_base=$(echo "$input_base" | tr -d '\r\n[:space:]')
+      BASE_BRANCH="${input_base:-main}"
+    fi
+  fi
+}
+
+# ── Jira 인증 및 티켓 정보 로드 ────────────────────────────────────────────────
+_load_jira_creds() {
+  local jira_info
+  jira_info=$(python3 - << 'PYEOF'
+import os, json, re, subprocess
+
+base_url = os.environ.get('JIRA_BASE_URL') or os.environ.get('JIRA_URL')
+token = os.environ.get('JIRA_PERSONAL_TOKEN') or os.environ.get('JIRA_TOKEN')
+
+# 1. bh-secrets CLI 확인
+if not token:
+    try:
+        out = subprocess.check_output(['bh-secrets', 'get', 'JIRA_PERSONAL_TOKEN'], stderr=subprocess.DEVNULL)
+        t = out.decode().strip()
+        if t: token = t
+    except Exception:
+        pass
+
+# 2. ~/.cursor/mcp.json 및 ~/.agents/mcp.json 확인
+if not token or not base_url:
+    for mcp_path in [os.path.expanduser('~/.cursor/mcp.json'), os.path.expanduser('~/.agents/mcp.json')]:
+        if not os.path.isfile(mcp_path):
+            continue
+        try:
+            with open(mcp_path) as f:
+                d = json.load(f)
+            srv = d.get('mcpServers', {}).get('mcp-atlassian', {})
+            args = srv.get('args', [])
+            for i, arg in enumerate(args):
+                if arg == '--jira-url' and i + 1 < len(args) and not base_url:
+                    base_url = args[i + 1]
+                if arg == '--jira-personal-token' and i + 1 < len(args) and not token:
+                    token = args[i + 1]
+        except Exception:
+            pass
+
+base_url = (base_url or 'https://jira.company.com').rstrip('/')
+print(base_url)
+print(token or '')
+PYEOF
+)
+  JIRA_BASE_URL=$(echo "$jira_info" | sed -n '1p')
+  JIRA_TOKEN=$(echo "$jira_info" | sed -n '2p')
+}
+
+# ── 티켓 ID 및 상세 정보 조회 ────────────────────────────────────────────────
+_fetch_ticket_info() {
+  TICKET_KEY="$EXPLICIT_TICKET"
+
+  # 1. 브랜치명에서 티켓 번호 추출 (e.g. feature/COMPANY-12345-desc -> COMPANY-12345)
+  if [[ -z "$TICKET_KEY" ]]; then
+    TICKET_KEY=$(echo "$CURRENT_BRANCH" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -n 1 || true)
+  fi
+
+  # 2. 최근 커밋 메시지에서 추출
+  if [[ -z "$TICKET_KEY" ]]; then
+    local recent_msgs
+    recent_msgs=$(git log -5 --format="%s" 2>/dev/null || true)
+    TICKET_KEY=$(echo "$recent_msgs" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -n 1 || true)
+  fi
+
+  TICKET_SUMMARY=""
+  TICKET_DESC=""
+  TICKET_TYPE=""
+  TICKET_STATUS=""
+
+  if [[ -n "$TICKET_KEY" && -n "$JIRA_TOKEN" ]]; then
+    info "Jira 티켓 정보 조회 중: ${BOLD}${TICKET_KEY}${RESET}..."
+    local ticket_json
+    ticket_json=$(curl -s -k -H "Authorization: Bearer ${JIRA_TOKEN}" \
+      "${JIRA_BASE_URL}/rest/api/2/issue/${TICKET_KEY}?fields=summary,description,issuetype,status" 2>/dev/null || true)
+
+    local parsed
+    parsed=$(python3 - << 'PYEOF' "$ticket_json"
+import sys, json
+
+raw = sys.argv[1]
+try:
+    d = json.loads(raw)
+    fields = d.get('fields', {})
+    summary = fields.get('summary', '')
+    desc = fields.get('description', '') or ''
+    desc_clean = ' '.join(desc.splitlines()[:5])
+    itype = fields.get('issuetype', {}).get('name', '')
+    status = fields.get('status', {}).get('name', '')
+    print(f"{summary}|{desc_clean}|{itype}|{status}")
+except Exception:
+    print("|||")
+PYEOF
+)
+    TICKET_SUMMARY=$(echo "$parsed" | cut -d'|' -f1)
+    TICKET_DESC=$(echo "$parsed" | cut -d'|' -f2)
+    TICKET_TYPE=$(echo "$parsed" | cut -d'|' -f3)
+    TICKET_STATUS=$(echo "$parsed" | cut -d'|' -f4)
+
+    if [[ -n "$TICKET_SUMMARY" ]]; then
+      success "Jira 티켓 연동: ${TICKET_KEY} - ${TICKET_SUMMARY} (${TICKET_TYPE})"
+    fi
+  fi
+}
+
+# ── 작업 성격(Bugfix vs Feature) 판별 ────────────────────────────────────────
+_detect_work_mode() {
+  if [[ -n "$FORCE_MODE" ]]; then
+    MODE="$FORCE_MODE"
+    return
+  fi
+
+  local is_bug=0
+
+  # 1. 브랜치명 검사 (bugfix, hotfix, fix, defect)
+  local lower_branch
+  lower_branch=$(echo "$CURRENT_BRANCH" | tr '[:upper:]' '[:lower:]')
+  if [[ "$lower_branch" == *"bugfix"* || "$lower_branch" == *"hotfix"* || "$lower_branch" == *"fix"* || "$lower_branch" == *"defect"* ]]; then
+    is_bug=1
+  fi
+
+  # 2. 티켓 유형 검사 (Defect, 버그, Bug, 결함)
+  if [[ -n "$TICKET_TYPE" ]]; then
+    local lower_type
+    lower_type=$(echo "$TICKET_TYPE" | tr '[:upper:]' '[:lower:]')
+    if [[ "$lower_type" == *"defect"* || "$lower_type" == *"버그"* || "$lower_type" == *"bug"* || "$lower_type" == *"결함"* ]]; then
+      is_bug=1
+    fi
+  fi
+
+  # 3. 커밋 메시지 검사
+  local commit_titles
+  commit_titles=$(git log --format="%s" "${BASE_BRANCH}..HEAD" 2>/dev/null || true)
+  if echo "$commit_titles" | grep -qiE '^(fix|hotfix|bugfix)(\(.*\))?:'; then
+    is_bug=1
+  fi
+
+  if [[ $is_bug -eq 1 ]]; then
+    MODE="bugfix"
+  else
+    MODE="feature"
+  fi
+}
+
+# ── Git 커밋 및 변경 코드(Diff) 수집 ──────────────────────────────────────────
+_collect_git_context() {
+  info "Git 커밋 및 코드 변경 사항(diff) 수집 중..."
+  if [[ $OUTPUT_CONTEXT -eq 0 && $QUIET -eq 0 ]]; then
+    echo -e "  ${DIM}Source 브랜치 : ${CURRENT_BRANCH}${RESET}" >&2
+    echo -e "  ${DIM}Target 베이스 : ${BASE_BRANCH}${RESET}" >&2
+  fi
+
+  COMMITS=$(git log --oneline "${BASE_BRANCH}..HEAD" 2>/dev/null || true)
+  if [[ -z "$COMMITS" && $OUTPUT_CONTEXT -eq 0 ]]; then
+    warn "베이스 브랜치(${BASE_BRANCH}) 대비 새로운 커밋이 없습니다."
+  fi
+
+  DIFF_STAT=$(git diff --stat "${BASE_BRANCH}...HEAD" 2>/dev/null || true)
+  RAW_DIFF=$(git diff "${BASE_BRANCH}...HEAD" 2>/dev/null || true)
+
+  if [[ -z "$RAW_DIFF" && $OUTPUT_CONTEXT -eq 0 ]]; then
+    warn "코드 변경 사항(diff)이 비어 있습니다."
+  fi
+
+  TRUNCATED_DIFF=$(python3 - << 'PYEOF' "$RAW_DIFF"
+import sys
+
+raw = sys.argv[1]
+MAX_CHARS = 35000
+
+if len(raw) <= MAX_CHARS:
+    print(raw)
+    sys.exit(0)
+
+lines = raw.splitlines()
+out = []
+cur_len = 0
+for l in lines:
+    if cur_len + len(l) + 1 > MAX_CHARS:
+        out.append("\n... (이하 diff 생략 - 전체 변경 사항 축약됨) ...\n")
+        break
+    out.append(l)
+    cur_len += len(l) + 1
+
+print('\n'.join(out))
+PYEOF
+)
+}
+
+# ── 컨텍스트 JSON 출력 (에이전트 연동용) ────────────────────────────────────────
+_output_context_json() {
+  python3 - << 'PYEOF' "$CURRENT_BRANCH" "$BASE_BRANCH" "$TICKET_KEY" "$TICKET_SUMMARY" "$TICKET_DESC" "$TICKET_TYPE" "$TICKET_STATUS" "$MODE" "$COMMITS" "$DIFF_STAT" "$RAW_DIFF"
+import sys, json
+
+(branch, base, tkey, tsummary, tdesc, ttype, tstatus, mode, commits, diff_stat, raw_diff) = sys.argv[1:12]
+
+MAX_CHARS = 40000
+is_truncated = len(raw_diff) > MAX_CHARS
+diff_content = raw_diff[:MAX_CHARS] + ("\n... (diff truncated)" if is_truncated else "")
+
+data = {
+    "current_branch": branch,
+    "base_branch": base,
+    "ticket_key": tkey or None,
+    "ticket_summary": tsummary or None,
+    "ticket_desc": tdesc or None,
+    "ticket_type": ttype or None,
+    "ticket_status": tstatus or None,
+    "mode": mode,
+    "is_bugfix": mode == "bugfix",
+    "commits": commits.strip() if commits else "",
+    "diff_stat": diff_stat.strip() if diff_stat else "",
+    "diff": diff_content,
+    "diff_truncated": is_truncated
+}
+print(json.dumps(data, ensure_ascii=False, indent=2))
+PYEOF
+}
+
+# ── 사용자/파일/파이프 입력 본문 로드 ──────────────────────────────────────────
+_read_input_body() {
+  if [[ -n "$DESC_FILE" ]]; then
+    if [[ ! -f "$DESC_FILE" ]]; then
+      die "지정한 본문 파일이 존재하지 않습니다: $DESC_FILE"
+    fi
+    CUSTOM_DESC=$(cat "$DESC_FILE")
+    return
+  fi
+
+  # 파이프 또는 리다이렉션으로 전달된 stdin 감지 (비차단 select)
+  if [[ -z "$CUSTOM_DESC" && ! -t 0 ]]; then
+    if python3 -c "import sys, select; sys.exit(0 if select.select([sys.stdin], [], [], 0.0)[0] else 1)" 2>/dev/null; then
+      local stdin_content
+      stdin_content=$(cat)
+      if [[ -n "$stdin_content" ]]; then
+        CUSTOM_DESC="$stdin_content"
+      fi
+    fi
+  fi
+}
+
+# ── 마크다운 정규화 및 검증 공통 유틸 ─────────────────────────────────────────
+_normalize_and_validate_body() {
+  local raw_body="$1"
+  local mode="$2"
+
+  python3 - << 'PYEOF' "$raw_body" "$mode"
+import sys, re, json
+
+body = sys.argv[1]
+mode = sys.argv[2]
+
+# 1. Bitbucket Markdown \n\n 빈 줄 정규화
+lines = body.splitlines()
+out = []
+prev_type = None
+
+for line in lines:
+    stripped = line.strip()
+    if not stripped:
+        if out and out[-1] != '':
+            out.append('')
+        prev_type = 'blank'
+        continue
+
+    is_header = stripped.startswith('#')
+    is_list = stripped.startswith(('-', '*', '+')) or (stripped[0].isdigit() and stripped[1:3] in ('. ', ') '))
+    curr_type = 'header' if is_header else ('list' if is_list else 'text')
+
+    if prev_type is not None and prev_type != 'blank':
+        if is_header or prev_type == 'header':
+            out.append('')
+        elif prev_type == 'text' and is_list:
+            out.append('')
+        elif prev_type == 'list' and not is_list:
+            out.append('')
+
+    out.append(line)
+    prev_type = curr_type
+
+normalized_body = '\n'.join(out).strip()
+
+# 2. Bugfix 필수 섹션 검증
+missing = []
+if mode == "bugfix":
+    if not re.search(r'이슈\s*현상|증상', normalized_body):
+        missing.append("이슈현상*")
+    if not re.search(r'(발생\s*)?원인|근본\s*원인', normalized_body):
+        missing.append("발생 원인*")
+    if not re.search(r'해결\s*방법|수정\s*내용|해결책', normalized_body):
+        missing.append("해결방법*")
+
+result = {
+    "normalized_body": normalized_body,
+    "missing": missing
+}
+print(json.dumps(result, ensure_ascii=False))
+PYEOF
+}
+
+# ── 하이브리드 커스텀 입력 처리 ───────────────────────────────────────────────
+_process_custom_pr() {
+  info "전달받은 PR 제목 및 설명을 처리하고 있습니다..."
+
+  # PR 제목 결정
+  if [[ -n "$CUSTOM_TITLE" ]]; then
+    PR_TITLE="$CUSTOM_TITLE"
+  elif [[ -n "$TICKET_KEY" && -n "$TICKET_SUMMARY" ]]; then
+    PR_TITLE="[${TICKET_KEY}] ${TICKET_SUMMARY}"
+  elif [[ -n "$TICKET_KEY" ]]; then
+    PR_TITLE="[${TICKET_KEY}] ${CURRENT_BRANCH}"
+  else
+    PR_TITLE="${CURRENT_BRANCH}"
+  fi
+
+  if [[ $IS_DRAFT -eq 1 && "$PR_TITLE" != "[DRAFT]"* ]]; then
+    PR_TITLE="[DRAFT] ${PR_TITLE}"
+  fi
+
+  local parse_res
+  parse_res=$(_normalize_and_validate_body "$CUSTOM_DESC" "$MODE")
+
+  PR_BODY=$(python3 -c "import sys, json; print(json.loads(sys.argv[1])['normalized_body'])" "$parse_res")
+  local missing
+  missing=$(python3 -c "import sys, json; print(', '.join(json.loads(sys.argv[1])['missing']))" "$parse_res")
+
+  if [[ -n "$missing" ]]; then
+    warn "🐞 Bugfix/Hotfix 모드 필수 섹션이 누락되었습니다: [${BOLD}${missing}${RESET}]"
+    if [[ $STRICT -eq 1 ]]; then
+      die "필수 섹션 누락으로 작업을 중단합니다. (강제 진행 시 --force 사용)"
+    else
+      warn "정책 준수를 위해 [이슈현상* / 발생 원인* / 해결방법*] 작성을 권장합니다."
+    fi
+  else
+    if [[ "$MODE" == "bugfix" ]]; then
+      success "🐞 Bugfix 필수 섹션 검증 완료 (이슈현상*, 발생 원인*, 해결방법*)"
+    fi
+  fi
+}
+
+# ── AI 에이전트 실행 및 PR 설명 자동 생성 ─────────────────────────────────────
+_generate_pr_with_agent() {
+  echo "" >&2
+  if [[ "$MODE" == "bugfix" ]]; then
+    info "작업 모드: ${BOLD}${RED}🐞 Bugfix / Hotfix 모드${RESET} (이슈현상, 원인, 해결방법 필수)"
+  else
+    info "작업 모드: ${BOLD}${BLUE}✨ Feature / Task 모드${RESET} (기획내용, 작업내용)"
+  fi
+
+  info "AI 에이전트(${ENGINE})를 구동하여 PR 설명을 작성하고 있습니다..."
+
+  # 에이전트 프롬프트 구축
+  local prompt
+  prompt=$(cat << EOF
+당신은 사내 최고 시니어 소프트웨어 엔지니어이자 코드 리뷰어입니다.
+아래의 Git 브랜치, Jira 티켓 정보, 커밋 로그, 코드 변경 사항(git diff)을 정밀하게 분석하여 고품질의 Pull Request(PR) 제목과 설명을 작성하세요.
+
+※ 절대 주의사항 (도구 실행 금지):
+- 당신은 텍스트 생성 전용 모드로 동작하고 있습니다.
+- bash 명령어, 파일 읽기 등 어떤 도구(tool)도 절대 실행하거나 호출하지 마십시오.
+- 필요한 모든 Git diff, 브랜치, 커밋 로그, Jira 티켓 정보는 아래 컨텍스트에 이미 전부 포함되어 있습니다.
+- 오직 텍스트로만 직접 작성하여 출력하십시오.
+
+## 컨텍스트 정보
+- 소스 브랜치: ${CURRENT_BRANCH}
+- 대상 베이스 브랜치: ${BASE_BRANCH}
+- Jira 티켓 키: ${TICKET_KEY:-"없음"}
+- Jira 티켓 제목: ${TICKET_SUMMARY:-"없음"}
+- Jira 티켓 설명: ${TICKET_DESC:-"없음"}
+- Jira 티켓 유형: ${TICKET_TYPE:-"없음"}
+- 작업 모드: ${MODE}
+
+## 커밋 목록
+${COMMITS:-"(커밋 없음)"}
+
+## 변경 파일 통계
+${DIFF_STAT:-"(통계 없음)"}
+
+## 코드 변경 diff
+${TRUNCATED_DIFF:-"(diff 없음)"}
+
+## 작성 지침 (필수 준수)
+1. 출력 포맷:
+첫 줄에는 반드시 PR 제목을 출력하고 본문을 작성하세요:
+===TITLE===
+[{TICKET_KEY:-"NO-TICKET"}] {간결하고 명확한 제목}
+===BODY===
+{PR 디스크립션 본문}
+
+2. 모드별 본문 구조:
+$(if [[ "$MODE" == "bugfix" ]]; then
+cat << 'BUGFIX_GUIDE'
+- 현재 작업은 버그 수정(Bugfix/Hotfix)이므로, 반드시 아래 섹션을 깊이 있게 작성하세요:
+## 이슈현상*
+
+- 어떤 조건/상황에서 어떤 이상 동작이나 에러가 발생했는지 구체적인 증상을 서술합니다.
+
+## 발생 원인*
+
+- 코드 diff와 티켓 내용을 바탕으로 버그가 발생한 기술적 근본 원인(Root Cause)을 정확히 분석하여 서술합니다.
+
+## 해결방법*
+
+- 무엇을 어떻게 수정했는지 구체적으로 서술하고, 그 의도/목적을 명시합니다. (예: "~를 수정: ~문제를 방지하기 위함")
+
+## 변경 요약
+
+- 핵심 변경 사항을 간결한 글머리 기호(불릿 리스트)로 정리합니다.
+
+## 서비스 영향범위*
+
+- 변경으로 인해 영향을 받는 화면, 컴포넌트, 또는 사용자 시나리오를 명시합니다.
+
+## 리뷰기한
+
+- 영업일 기준 적절한 리뷰 기한 일자를 제시합니다.
+BUGFIX_GUIDE
+else
+cat << 'FEAT_GUIDE'
+- 현재 작업은 기능 개발(Feature/Task)이므로, 표준 템플릿 구조를 따릅니다:
+## 기획내용*
+
+- 티켓 및 개발 배경, 기획 요구사항을 요약합니다.
+
+## 작업내용*
+
+- 무엇을 변경했는지 목적과 함께 명확히 서술합니다. (예: "~를 추가: ~하기 위함")
+
+## 변경 요약
+
+- 핵심 변경 사항을 불릿 리스트로 정리합니다.
+
+## 서비스 영향범위*
+
+- 변경으로 인해 영향을 받는 영역을 명시합니다.
+
+## 리뷰기한
+
+- 영업일 기준 적절한 리뷰 기한 일자를 제시합니다.
+FEAT_GUIDE
+fi)
+
+3. Bitbucket Markdown 빈 줄 규칙 (중요):
+- Bitbucket에서는 블록 요소 사이에 반드시 빈 줄(\n\n)이 있어야 단락이 올바르게 구분됩니다.
+- 모든 '##' 헤더 앞뒤, 글머리 기호 리스트 전후에는 반드시 빈 줄을 삽입하세요.
+
+4. 톤앤매너:
+- 한국어로 전문적이고 군더더기 없는 두괄식 문체로 작성하세요. 불필요한 AI 인사말이나 서두/결문은 포함하지 마세요.
+EOF
+)
+
+  local agent_output=""
+  local agent_exit_code=0
+
+  if [[ "$ENGINE" == "agy" ]] && command -v agy &>/dev/null; then
+    # agy 플래그 순서: --print 앞에 --dangerously-skip-permissions 배치해야 헤드리스 권한 오류 방지
+    agent_output=$(agy --dangerously-skip-permissions --print "$prompt" 2>&1) || agent_exit_code=$?
+  elif [[ "$ENGINE" == "cursor" ]] && command -v cursor &>/dev/null; then
+    agent_output=$(cursor agent --print "$prompt" 2>&1) || agent_exit_code=$?
+  else
+    agent_exit_code=1
+  fi
+
+  # 에이전트 응답 파싱 및 안전 Fallback 처리
+  local parse_res
+  parse_res=$(python3 - << 'PYEOF' "$agent_output" "$agent_exit_code" "$MODE" "$TICKET_KEY" "$TICKET_SUMMARY" "$COMMITS" "$DIFF_STAT"
+import sys, re, json
+
+(raw_output, exit_code_str, mode, tkey, tsummary, commits, diff_stat) = sys.argv[1:8]
+exit_code = int(exit_code_str)
+
+m_title = re.search(r'===TITLE===\s*\n*(.*?)\n*===BODY===', raw_output, re.DOTALL)
+m_body = re.search(r'===BODY===\s*\n*(.*)', raw_output, re.DOTALL)
+
+# 오류 메시지 또는 권한 거부 감지
+is_error = (exit_code != 0) or ("jetski:" in raw_output) or ("Error:" in raw_output and not m_title) or not (m_title and m_body)
+
+if not is_error:
+    title = m_title.group(1).strip().splitlines()[0]
+    body = m_body.group(1).strip()
+    is_fallback = False
+else:
+    is_fallback = True
+    title = f"[{tkey}] {tsummary}" if tkey and tsummary else (f"[{tkey}] 작업 변경사항" if tkey else (tsummary or "작업 변경사항"))
+    if mode == "bugfix":
+        body = f"""## 이슈현상*
+
+- {tsummary or '오류 또는 비정상 동작 발생'}
+
+## 발생 원인*
+
+- 관련 코드 로직 및 조건 분기 처리 누락
+
+## 해결방법*
+
+- 관련 로직 보완 및 방어 코드 추가: 안정적인 동작 보장
+
+## 변경 요약
+
+{commits or '- 세부 커밋 내역 참조'}
+
+## 서비스 영향범위*
+
+- 관련 서비스 영역 및 사용자 플로우
+
+## 리뷰기한
+
+- 영업일 기준 1일 이내"""
+    else:
+        body = f"""## 기획내용*
+
+- {tsummary or '요구사항 구현 및 비즈니스 로직 반영'}
+
+## 작업내용*
+
+- 주요 컴포넌트 및 서비스 로직 개발
+
+## 변경 요약
+
+{commits or '- 세부 커밋 내역 참조'}
+
+## 서비스 영향범위*
+
+- 관련 서비스 영역 및 사용자 플로우
+
+## 리뷰기한
+
+- 영업일 기준 2일 이내"""
+
+result = {
+    "title": title,
+    "body": body,
+    "is_fallback": is_fallback,
+    "error_hint": raw_output[:300] if is_fallback else ""
+}
+print(json.dumps(result, ensure_ascii=False))
+PYEOF
+)
+
+  local is_fallback
+  is_fallback=$(python3 -c "import sys, json; print('1' if json.loads(sys.argv[1])['is_fallback'] else '0')" "$parse_res")
+  local parsed_title
+  parsed_title=$(python3 -c "import sys, json; print(json.loads(sys.argv[1])['title'])" "$parse_res")
+  local parsed_body
+  parsed_body=$(python3 -c "import sys, json; print(json.loads(sys.argv[1])['body'])" "$parse_res")
+
+  if [[ "$is_fallback" == "1" ]]; then
+    warn "AI 에이전트 응답 생성 실패 또는 오류 감지. 기본 템플릿(Fallback)으로 안전하게 대체합니다."
+    local err_hint
+    err_hint=$(python3 -c "import sys, json; print(json.loads(sys.argv[1])['error_hint'].replace('\n', ' '))" "$parse_res")
+    if [[ -n "$err_hint" ]]; then
+      echo -e "  ${DIM}원인 힌트: ${err_hint:0:120}...${RESET}" >&2
+    fi
+  fi
+
+  if [[ -n "$CUSTOM_TITLE" ]]; then
+    PR_TITLE="$CUSTOM_TITLE"
+  else
+    PR_TITLE="$parsed_title"
+  fi
+
+  if [[ $IS_DRAFT -eq 1 && "$PR_TITLE" != "[DRAFT]"* ]]; then
+    PR_TITLE="[DRAFT] ${PR_TITLE}"
+  fi
+
+  # 에이전트 본문 정규화 및 검증
+  local parse_res
+  parse_res=$(_normalize_and_validate_body "$parsed_body" "$MODE")
+  PR_BODY=$(python3 -c "import sys, json; print(json.loads(sys.argv[1])['normalized_body'])" "$parse_res")
+  local missing
+  missing=$(python3 -c "import sys, json; print(', '.join(json.loads(sys.argv[1])['missing']))" "$parse_res")
+
+  if [[ -n "$missing" ]]; then
+    warn "🐞 에이전트 응답에 Bugfix/Hotfix 필수 섹션이 누락되었습니다: [${BOLD}${missing}${RESET}]"
+  else
+    if [[ "$MODE" == "bugfix" ]]; then
+      success "🐞 Bugfix 필수 섹션 검증 완료 (이슈현상*, 발생 원인*, 해결방법*)"
+    fi
+  fi
+}
+
+# ── 프리뷰 및 클립보드 저장 ──────────────────────────────────────────────────
+_show_preview() {
+  local slug="${TICKET_KEY:-$CURRENT_BRANCH}"
+  slug=$(echo "$slug" | tr '/' '-')
+  PREVIEW_FILE="/tmp/pr-preview-${slug}.md"
+
+  # 프리뷰 파일 저장
+  cat << EOF > "$PREVIEW_FILE"
+<!-- PR 프리뷰 — 파일을 편집하면 수정된 내용이 PR에 반영됩니다 -->
+# ${PR_TITLE}
+
+- **Source**: ${CURRENT_BRANCH}
+- **Target**: ${BASE_BRANCH}
+- **Ticket**: ${TICKET_KEY:-"없음"}
+
+---
+
+${PR_BODY}
+EOF
+
+  # macOS 클립보드 복사
+  if command -v pbcopy &>/dev/null; then
+    cat << EOF | pbcopy
+# ${PR_TITLE}
+
+${PR_BODY}
+EOF
+  fi
+
+  echo ""
+  echo -e "${BOLD}${CYAN}┌─────────────────────────────────────────────────────────────┐${RESET}"
+  echo -e "${BOLD}${CYAN}│                   PR 디스크립션 프리뷰                      │${RESET}"
+  echo -e "${BOLD}${CYAN}└─────────────────────────────────────────────────────────────┘${RESET}"
+  echo -e "  ${BOLD}Source 브랜치${RESET}: ${BLUE}${CURRENT_BRANCH}${RESET}"
+  echo -e "  ${BOLD}Target 브랜치${RESET}: ${BLUE}${BASE_BRANCH}${RESET}"
+  echo -e "  ${BOLD}연결 Jira    ${RESET}: ${GREEN}${TICKET_KEY:-"미연결"}${RESET} ${DIM}(${TICKET_SUMMARY})${RESET}"
+  echo -e "  ${BOLD}PR 제목      ${RESET}: ${BOLD}${PR_TITLE}${RESET}"
+  echo -e "  ${BOLD}프리뷰 파일  ${RESET}: ${DIM}${PREVIEW_FILE}${RESET}"
+  echo -e "${CYAN}─────────────────────────────────────────────────────────────${RESET}"
+  echo ""
+  echo "$PR_BODY"
+  echo ""
+  echo -e "${CYAN}─────────────────────────────────────────────────────────────${RESET}"
+
+  if command -v pbcopy &>/dev/null; then
+    success "PR 제목과 설명이 ${BOLD}클립보드(pbcopy)${RESET}에 복사되었습니다."
+  fi
+}
+
+# ── Bitbucket 원격 브랜치 상태 및 PR 생성 ────────────────────────────────────
+_create_bitbucket_pr() {
+  info "Bitbucket PR 생성 확인 중..."
+
+  # 원격에 소스 브랜치 푸시 여부 확인
+  if ! git ls-remote --heads origin "$CURRENT_BRANCH" 2>/dev/null | grep -q "$CURRENT_BRANCH"; then
+    warn "원격(origin)에 브랜치 '${CURRENT_BRANCH}'가 푸시되어 있지 않습니다."
+    if [[ $CONFIRM -eq 1 ]]; then
+      echo -ne "  원격에 현재 브랜치를 푸시하시겠습니까? [Y/n]: " >&2
+      local push_ans=""
+      if [[ -r /dev/tty ]]; then
+        read -r push_ans < /dev/tty || push_ans="y"
+      elif [[ -t 0 ]]; then
+        read -r push_ans || push_ans="y"
+      else
+        push_ans="y"
+      fi
+      push_ans=$(echo "$push_ans" | tr -d '\r\n[:space:]' | tr '[:upper:]' '[:lower:]')
+
+      if [[ -z "$push_ans" || "$push_ans" == "y" || "$push_ans" == "yes" ]]; then
+        info "git push -u origin ${CURRENT_BRANCH} 실행 중..."
+        if git push -u origin "$CURRENT_BRANCH"; then
+          success "원격 푸시 완료."
+        else
+          error "원격 푸시에 실패했습니다. 네트워크 상태 및 브랜치 권한을 확인해주세요."
+          return
+        fi
+      else
+        warn "푸시를 건너뛰었습니다. Bitbucket 웹에서 직접 PR을 생성해주세요."
+        return
+      fi
+    else
+      info "git push -u origin ${CURRENT_BRANCH} 자동 실행 중..."
+      if git push -u origin "$CURRENT_BRANCH"; then
+        success "원격 푸시 완료."
+      else
+        error "원격 푸시에 실패했습니다."
+        return
+      fi
+    fi
+  fi
+
+  # Bitbucket 인증 정보 확인
+  local bb_email bb_token
+  bb_email=$(python3 -c "import os; print(os.popen('bh-secrets get BITBUCKET_EMAIL 2>/dev/null').read().strip())")
+  bb_token=$(python3 -c "import os; print(os.popen('bh-secrets get BITBUCKET_BEARER_TOKEN 2>/dev/null').read().strip())")
+
+  if [[ -z "$bb_email" || -z "$bb_token" ]]; then
+    warn "Bitbucket 인증 정보(BITBUCKET_EMAIL / BITBUCKET_BEARER_TOKEN)가 없습니다."
+    info "브라우저 PR 생성 페이지를 엽니다."
+    _open_pr_in_browser
+    return
+  fi
+
+  info "Bitbucket API로 PR 생성 요청 중..."
+
+  local payload
+  payload=$(python3 - << 'PYEOF' "$PR_TITLE" "$PR_BODY" "$CURRENT_BRANCH" "$BASE_BRANCH"
+import json, sys
+
+title = sys.argv[1]
+desc = sys.argv[2]
+source = sys.argv[3]
+dest = sys.argv[4]
+
+data = {
+    "title": title,
+    "description": desc,
+    "source": {"branch": {"name": source}},
+    "destination": {"branch": {"name": dest}},
+    "close_source_branch": True
+}
+print(json.dumps(data, ensure_ascii=False))
+PYEOF
+)
+
+  local endpoint="https://api.bitbucket.org/2.0/repositories/${BB_WORKSPACE}/${BB_REPO}/pullrequests"
+  local response http_code
+  response=$(curl -s -w "\n__HTTP_STATUS__%{http_code}" \
+    -X POST \
+    -u "${bb_email}:${bb_token}" \
+    -H "Content-Type: application/json; charset=utf-8" \
+    -d "$payload" \
+    "$endpoint")
+
+  http_code=$(echo "$response" | grep -o '__HTTP_STATUS__[0-9]*' | grep -o '[0-9]*')
+  local body="${response%__HTTP_STATUS__*}"
+
+  if [[ "$http_code" -ge 200 && "$http_code" -lt 300 ]]; then
+    local pr_url pr_id
+    pr_url=$(python3 -c "import sys, json; d=json.loads(sys.argv[1]); print(d.get('links',{}).get('html',{}).get('href',''))" "$body")
+    pr_id=$(python3 -c "import sys, json; d=json.loads(sys.argv[1]); print(d.get('id',''))" "$body")
+
+    echo ""
+    success "${BOLD}Bitbucket PR이 성공적으로 생성되었습니다!${RESET}"
+    echo -e "  ${BOLD}PR 번호 :${RESET} #${pr_id}"
+    echo -e "  ${BOLD}PR URL  :${RESET} ${BLUE}${pr_url}${RESET}"
+
+    if command -v pbcopy &>/dev/null; then
+      echo -n "$pr_url" | pbcopy
+    fi
+
+    if [[ $OPEN_BROWSER -eq 1 ]]; then
+      open "$pr_url" 2>/dev/null || true
+    elif [[ $CONFIRM -eq 1 ]]; then
+      echo -ne "  브라우저에서 PR을 바로 여시겠습니까? [y/N]: " >&2
+      local open_ans=""
+      if [[ -r /dev/tty ]]; then
+        read -r open_ans < /dev/tty || open_ans="n"
+      elif [[ -t 0 ]]; then
+        read -r open_ans || open_ans="n"
+      else
+        open_ans="n"
+      fi
+      open_ans=$(echo "$open_ans" | tr -d '\r\n[:space:]' | tr '[:upper:]' '[:lower:]')
+      if [[ "$open_ans" == "y" || "$open_ans" == "yes" ]]; then
+        open "$pr_url" 2>/dev/null || true
+      fi
+    fi
+  else
+    error "Bitbucket PR 생성 실패 (HTTP ${http_code})"
+    python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.argv[1])
+    print('  -', d.get('error', {}).get('message', sys.argv[1]))
+except Exception:
+    print(sys.argv[1])
+" "$body" >&2
+    info "브라우저 생성 페이지를 이용해 주세요."
+    _open_pr_in_browser
+  fi
+}
+
+# ── 브라우저 열기 ────────────────────────────────────────────────────────────
+_open_pr_in_browser() {
+  local web_url="https://bitbucket.org/${BB_WORKSPACE}/${BB_REPO}/pull-requests/new?source=${CURRENT_BRANCH}&dest=${BASE_BRANCH}"
+  echo -e "  ${BOLD}PR 생성 URL:${RESET} ${BLUE}${web_url}${RESET}"
+  if [[ $OPEN_BROWSER -eq 1 || $CONFIRM -eq 1 ]]; then
+    echo -ne "  브라우저에서 PR 생성 페이지를 여시겠습니까? [Y/n]: " >&2
+    local ans=""
+    if [[ -r /dev/tty ]]; then
+      read -r ans < /dev/tty || ans="y"
+    elif [[ -t 0 ]]; then
+      read -r ans || ans="y"
+    else
+      ans="y"
+    fi
+    ans=$(echo "$ans" | tr -d '\r\n[:space:]' | tr '[:upper:]' '[:lower:]')
+    if [[ -z "$ans" || "$ans" == "y" || "$ans" == "yes" ]]; then
+      open "$web_url" 2>/dev/null || true
+    fi
+  fi
+}
+
+# ── 대화형 다음 액션 메뉴 ────────────────────────────────────────────────────
+_prompt_next_actions() {
+  if [[ $DRY_RUN -eq 1 || $CONFIRM -eq 0 ]]; then
+    if [[ $DO_CREATE -eq 1 ]]; then
+      _create_bitbucket_pr
+    fi
+    return
+  fi
+
+  if [[ $DO_CREATE -eq 1 ]]; then
+    _create_bitbucket_pr
+    return
+  fi
+
+  if [[ ! -t 0 && ! -r /dev/tty ]]; then
+    return
+  fi
+
+  echo ""
+  echo -e "${BOLD}다음 작업을 선택하세요:${RESET}"
+  echo "  1) Bitbucket에 PR 바로 생성 (API)"
+  echo "  2) 브라우저에서 PR 생성 페이지 열기"
+  echo "  3) 에디터(\$EDITOR)에서 프리뷰 파일 편집"
+  echo "  4) 완료 (종료)"
+  echo -ne "선택 (1-4, 기본 4): "
+  local choice=""
+  if [[ -r /dev/tty ]]; then
+    read -r choice < /dev/tty || choice="4"
+  elif [[ -t 0 ]]; then
+    read -r choice || choice="4"
+  else
+    choice="4"
+  fi
+  choice=$(echo "$choice" | tr -d '\r\n[:space:]')
+  choice="${choice:-4}"
+
+  case "$choice" in
+    1)
+      _create_bitbucket_pr
+      ;;
+    2)
+      _open_pr_in_browser
+      ;;
+    3)
+      "${EDITOR:-vim}" "$PREVIEW_FILE"
+      PR_TITLE=$(grep -m 1 "^# " "$PREVIEW_FILE" | sed 's/^# //' || echo "$PR_TITLE")
+      PR_BODY=$(sed -n '/---/,$p' "$PREVIEW_FILE" | tail -n +2)
+      success "프리뷰 파일 수정 사항이 반영되었습니다."
+      _prompt_next_actions
+      ;;
+    *)
+      success "작업을 완료했습니다."
+      ;;
+  esac
+}
+
+# ── 메인 실행 흐름 ────────────────────────────────────────────────────────────
+main() {
+  _check_git_repo
+  _resolve_base_branch
+  _load_jira_creds
+  _fetch_ticket_info
+  _detect_work_mode
+  _collect_git_context
+
+  # 1. 컨텍스트만 요청한 경우 JSON 출력 후 종료
+  if [[ $OUTPUT_CONTEXT -eq 1 ]]; then
+    _output_context_json
+    exit 0
+  fi
+
+  # 2. 파일/파이프 입력 본문 로드
+  _read_input_body
+
+  # 3. 본문 생성/처리 (하이브리드 vs 내장 AI)
+  if [[ -n "$CUSTOM_DESC" ]]; then
+    _process_custom_pr
+  else
+    _generate_pr_with_agent
+  fi
+
+  # 4. 프리뷰 및 후속 동작
+  _show_preview
+  _prompt_next_actions
+}
+
+main "$@"
