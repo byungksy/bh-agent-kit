@@ -1,0 +1,448 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# bh-upload-pdp-source-maps
+# 
+# Sentry 소스맵 업로드 헬퍼 스크립트 (모노레포 PDP 지원)
+#
+# [보안 주의]
+# 사내 도메인, URL, 프로젝트명, 인증 토큰 등의 민감 정보는 스크립트 내에
+# 절대 하드코딩하지 않습니다. 환경변수 또는 ~/.sentry-pdp.env 파일을 통해 주입합니다.
+# ==============================================================================
+set -euo pipefail
+
+# 1. 환경변수 파일 순회 로드
+CANDIDATE_ENVS=(
+  ".env"
+  ".env.local"
+  ".env.sentry"
+  "$HOME/.config/sentry/pdp.env"
+  "$HOME/.sentry-pdp.env"
+)
+
+for ENV_FILE in "${CANDIDATE_ENVS[@]}"; do
+  EXPANDED_FILE=$(eval echo "$ENV_FILE")
+  if [ -f "$EXPANDED_FILE" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$EXPANDED_FILE" 2>/dev/null || true
+    set +a
+  fi
+done
+
+# 1-1. bh-secrets 도구가 존재할 경우 최신 토큰 우선 동기화
+if command -v bh-secrets >/dev/null 2>&1; then
+  BH_TOKEN=$(bh-secrets get SENTRY_AUTH_TOKEN 2>/dev/null || true)
+  if [ -n "$BH_TOKEN" ]; then
+    export SENTRY_AUTH_TOKEN="$BH_TOKEN"
+  fi
+fi
+
+# 2. 도움말
+usage() {
+  local exit_code="${1:-1}"
+  cat << 'HELP'
+Usage:
+  bh-upload-pdp-source-maps [OPTIONS] [TARGET]
+
+Target:
+  all (기본값)           모든 앱(pdp, retail, luxury, amazon, pages) 업로드
+  <app-name>             특정 앱만 업로드 (예: pdp, retail, luxury, amazon, pages)
+  sourcemaps.tar.gz      CI 파이프라인에서 보존된 소스맵 아티팩트 파일
+  <custom-directory>     업로드할 디렉토리 직접 지정
+
+Options:
+  --from-bp-log [FILE]   BP 러너 로그에서 Debug ID를 추출하여 로컬 .map에 주입 후 업로드
+                         (인자 생략 시 표준입력/pbpaste 지원)
+  --include-rc           RC(dev/alp) 빌드 산출물도 포함 (기본값: 제외, 상용만 업로드)
+  --inject               업로드 전 sentry-cli sourcemaps inject 실행
+  --debug-id-only        릴리즈 태그(--release)를 지정하지 않고 Debug ID로만 업로드
+  --dry-run              실제 업로드 없이 대상 파일 및 릴리즈 정보만 시뮬레이션
+  -h, --help             도움말 표시
+
+Required Environment Variables:
+  SENTRY_URL             Sentry 서버 엔드포인트 URL
+  SENTRY_ORG             Sentry 조직(Organization) 슬러그
+  SENTRY_PROJECT         Sentry 프로젝트명
+  SENTRY_AUTH_TOKEN      Sentry 인증 토큰
+
+Examples:
+  # 1. BP 러너 로그를 클립보드에서 바로 읽어 Debug ID 주입 후 업로드
+  pbpaste | bh-upload-pdp-source-maps --from-bp-log
+
+  # 2. BP 러너 로그 파일 지정
+  bh-upload-pdp-source-maps --from-bp-log runner.log
+
+  # 3. CI 아티팩트(sourcemaps.tar.gz) 바로 업로드
+  bh-upload-pdp-source-maps sourcemaps.tar.gz
+
+  # 4. 전체 앱 일괄 업로드 (시뮬레이션)
+  bh-upload-pdp-source-maps --dry-run
+HELP
+  exit "$exit_code"
+}
+
+# 3. 필수 환경변수 검증
+check_env() {
+  local missing=()
+  [ -z "${SENTRY_URL:-}" ] && missing+=("SENTRY_URL (예: https://sentry.example.com/)")
+  [ -z "${SENTRY_ORG:-}" ] && missing+=("SENTRY_ORG (예: my-org)")
+  [ -z "${SENTRY_PROJECT:-}" ] && missing+=("SENTRY_PROJECT (예: my-project)")
+  [ -z "${SENTRY_AUTH_TOKEN:-}" ] && missing+=("SENTRY_AUTH_TOKEN (Sentry 인증 토큰)")
+
+  if [ ${#missing[@]} -gt 0 ]; then
+    echo "❌ [Error] 필수 Sentry 설정이 누락되었습니다:" >&2
+    for item in "${missing[@]}"; do
+      echo "  - $item" >&2
+    done
+    echo "" >&2
+    echo "환경변수를 export하거나 ~/.sentry-pdp.env 파일에 정의해주세요." >&2
+    exit 1
+  fi
+}
+
+# 4. sentry-cli 실행 바이너리 탐색
+find_sentry_cli() {
+  local cli_path=""
+  local project_root
+  project_root="$(pwd)"
+
+  if [ -x "${project_root}/node_modules/.bin/sentry-cli" ]; then
+    cli_path="${project_root}/node_modules/.bin/sentry-cli"
+  elif command -v sentry-cli >/dev/null 2>&1; then
+    cli_path="$(command -v sentry-cli)"
+  elif command -v npx >/dev/null 2>&1; then
+    cli_path="npx sentry-cli"
+  else
+    echo "❌ [Error] sentry-cli 또는 npx를 찾을 수 없습니다." >&2
+    echo "  pnpm install 또는 npm install -g @sentry/cli 를 실행해주세요." >&2
+    exit 1
+  fi
+
+  echo "$cli_path"
+}
+
+# 5. 옵션 파싱
+FORCE_INJECT=false
+DEBUG_ID_ONLY=false
+DRY_RUN=false
+INCLUDE_RC=false
+FROM_BP_LOG=false
+BP_LOG_FILE=""
+TARGET="all"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --from-bp-log)
+      FROM_BP_LOG=true
+      shift
+      if [ $# -gt 0 ] && [[ "$1" != -* ]]; then
+        BP_LOG_FILE="$1"
+        shift
+      fi
+      ;;
+    --include-rc)
+      INCLUDE_RC=true
+      shift
+      ;;
+    --inject)
+      FORCE_INJECT=true
+      shift
+      ;;
+    --debug-id-only)
+      DEBUG_ID_ONLY=true
+      shift
+      ;;
+    --dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+    -h|--help)
+      usage 0
+      ;;
+    -*)
+      echo "❌ 알 수 없는 옵션: $1" >&2
+      usage 1
+      ;;
+    *)
+      TARGET="$1"
+      shift
+      ;;
+  esac
+done
+
+check_env
+SENTRY_CLI="$(find_sentry_cli)"
+
+# 6. BP 러너 로그 기반 Debug ID 패치 로직
+if [ "$FROM_BP_LOG" = true ]; then
+  echo "=================================================="
+  echo "📥 BP 러너 로그 기반 Debug ID 동기화"
+  echo "=================================================="
+
+  LOG_CONTENT=""
+  if [ -n "$BP_LOG_FILE" ] && [ -f "$BP_LOG_FILE" ]; then
+    echo "📄 파일에서 로그 읽는 중: $BP_LOG_FILE"
+    LOG_CONTENT=$(cat "$BP_LOG_FILE")
+  elif [ ! -t 0 ]; then
+    echo "📋 표준 입력(stdin)에서 로그 읽는 중..."
+    LOG_CONTENT=$(cat)
+  else
+    echo "❌ [Error] BP 러너 로그를 전달받지 못했습니다." >&2
+    echo "  사용법: pbpaste | bh-upload-pdp-source-maps --from-bp-log" >&2
+    echo "  또는:   bh-upload-pdp-source-maps --from-bp-log runner.log" >&2
+    exit 1
+  fi
+
+  PATCH_RESULT=$(python3 - <<PYEOF
+import re, json, sys, os
+
+log_text = """$LOG_CONTENT"""
+matches = re.findall(r'([0-9a-fA-F-]{36})\s*-\s*([^\s]+\.map)', log_text)
+if not matches:
+    print("NO_MATCH", file=sys.stderr)
+    sys.exit(2)
+
+print(f"🔍 BP 로그에서 {len(matches)}개의 소스맵 Debug ID 감지", file=sys.stderr)
+
+patched_dirs = set()
+success_count = 0
+missing_files = []
+
+for debug_id, rel_path in matches:
+    clean_path = rel_path.lstrip("./")
+    if not os.path.exists(clean_path):
+        missing_files.append(clean_path)
+        continue
+    try:
+        with open(clean_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        data["debugId"] = debug_id
+        with open(clean_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, separators=(",", ":"))
+        patched_dirs.add(os.path.dirname(clean_path))
+        success_count += 1
+    except Exception as e:
+        print(f"⚠️ 패치 실패: {clean_path} ({e})", file=sys.stderr)
+
+print(f"✔ {success_count}개 .map 파일에 BP Debug ID 주입 완료", file=sys.stderr)
+if missing_files:
+    print(f"⚠️ 로컬에 빌드 파일이 없어 패치 건너뜀: {len(missing_files)}개 (예: {missing_files[0]})", file=sys.stderr)
+    print("   -> 최신 master 브랜치 pull 후 'pnpm run build:prod'를 먼저 실행해야 합니다.", file=sys.stderr)
+
+if success_count == 0:
+    sys.exit(3)
+
+print(" ".join(patched_dirs))
+PYEOF
+  ) || {
+    EXIT_CODE=$?
+    if [ "$EXIT_CODE" -eq 2 ]; then
+      echo "❌ [Error] 로그에서 'Debug ID - 파일경로.map' 패턴을 찾지 못했습니다." >&2
+    elif [ "$EXIT_CODE" -eq 3 ]; then
+      echo "❌ [Error] 패치할 수 있는 .map 파일이 로컬에 없습니다." >&2
+      echo "👉 조치: 'git pull && pnpm run build:prod' 실행 후 다시 시도하거나," >&2
+      echo "        Bitbucket 파이프라인에서 'sourcemaps.tar.gz'를 받아 실행하세요." >&2
+    fi
+    exit 1
+  }
+
+  echo ""
+  echo "🚀 주입된 디렉토리 Sentry 업로드 시작..."
+  for pdir in $PATCH_RESULT; do
+    echo "📤 Uploading: $pdir"
+    cmd=("$SENTRY_CLI" "sourcemaps" "upload" "--org" "$SENTRY_ORG" "--project" "$SENTRY_PROJECT" "$pdir")
+    if [ "$DRY_RUN" = true ]; then
+      echo "   (Dry-run) ${cmd[*]}"
+    else
+      "${cmd[@]}"
+    fi
+  done
+  echo "✅ BP Debug ID 기반 소스맵 업로드 완료."
+  exit 0
+fi
+
+# 7. 임시 디렉토리 관리 (tar.gz 아티팩트 해제용)
+TEMP_DIR=""
+cleanup() {
+  if [ -n "$TEMP_DIR" ] && [ -d "$TEMP_DIR" ]; then
+    rm -rf "$TEMP_DIR"
+  fi
+}
+trap cleanup EXIT INT TERM
+
+# 8. 대상 소스 경로 판별 및 tilde 확장
+TARGET_EXPANDED=$(eval echo "$TARGET")
+BASE_DIR="."
+SUPPORTED_APPS=("pdp" "retail" "luxury" "amazon" "pages")
+APPS_TO_PROCESS=()
+
+# 타겟이 tar.gz 확장자이지만 파일이 없는 경우 명확한 에러 안내
+if [[ "$TARGET" == *.tar.gz || "$TARGET" == *.tgz ]] && [ ! -f "$TARGET_EXPANDED" ]; then
+  echo "❌ [Error] 다운로드한 아티팩트 파일을 찾을 수 없습니다: $TARGET_EXPANDED" >&2
+  echo "" >&2
+  echo "👉 Bitbucket Pipelines 웹 콘솔에서 'sourcemaps.tar.gz'를 먼저 다운로드해 주세요:" >&2
+  echo "   Artifacts 다운로드 직통 링크:" >&2
+  echo "   https://bitbucket.org/company/your-repo/pipelines/results/<build-number>/steps/<step-id>" >&2
+  echo "" >&2
+  echo "💡 또는 최신 master 빌드 후 방금 주신 BP 로그로 다운로드 없이 바로 업로드 가능합니다:" >&2
+  echo "   git pull origin master && pnpm run build:prod" >&2
+  echo "   pbpaste | bh-upload-pdp-source-maps --from-bp-log" >&2
+  exit 1
+fi
+
+if [ -f "$TARGET_EXPANDED" ]; then
+  case "$TARGET_EXPANDED" in
+    *.tar.gz|*.tgz)
+      echo "📦 압축 아티팩트 감지: $TARGET_EXPANDED"
+      TEMP_DIR="$(mktemp -d)"
+      echo "=> 임시 디렉토리에 압축 해제 중: $TEMP_DIR"
+      tar -xzf "$TARGET_EXPANDED" -C "$TEMP_DIR"
+      BASE_DIR="$TEMP_DIR"
+      APPS_TO_PROCESS=("${SUPPORTED_APPS[@]}")
+      ;;
+    *)
+      echo "❌ [Error] 지원하지 않는 파일 형식입니다. (.tar.gz 또는 디렉토리/앱명)" >&2
+      exit 1
+      ;;
+  esac
+elif [ "$TARGET" = "all" ] || [ -z "$TARGET" ]; then
+  APPS_TO_PROCESS=("${SUPPORTED_APPS[@]}")
+elif [[ " ${SUPPORTED_APPS[*]} " =~ [[:space:]]${TARGET}[[:space:]] ]]; then
+  APPS_TO_PROCESS=("$TARGET")
+elif [ -d "$TARGET_EXPANDED" ]; then
+  BASE_DIR="$TARGET_EXPANDED"
+  APPS_TO_PROCESS=()
+else
+  echo "❌ [Error] 존재하지 않는 파일/디렉토리이거나 알 수 없는 대상입니다: $TARGET_EXPANDED" >&2
+  usage 1
+fi
+
+echo "=================================================="
+echo "🚀 Sentry Source Map Upload"
+echo "=================================================="
+echo "  URL        : $SENTRY_URL"
+echo "  Org        : $SENTRY_ORG"
+echo "  Project    : $SENTRY_PROJECT"
+echo "  Target     : $TARGET"
+echo "  Dry Run    : $DRY_RUN"
+echo "  Prod Only  : $([ "$INCLUDE_RC" = false ] && echo 'Yes (RC 제외)' || echo 'No (RC 포함)')"
+echo "  Debug ID   : $([ "$DEBUG_ID_ONLY" = true ] && echo 'Debug ID Only' || echo 'Release + Debug ID')"
+echo "=================================================="
+echo ""
+
+# 9. 단일 디렉토리 업로드 함수
+upload_directory() {
+  local dir_path="$1"
+  local release_name="${2:-}"
+
+  if [ ! -d "$dir_path" ]; then
+    return 0
+  fi
+
+  local map_count
+  if [ "$INCLUDE_RC" = false ]; then
+    map_count=$(find "$dir_path" -name "*.js.map" ! -name "*-rc*" ! -name "*rc-*" ! -path "*/shared/*" 2>/dev/null | wc -l | tr -d ' ')
+  else
+    map_count=$(find "$dir_path" -name "*.js.map" ! -path "*/shared/*" 2>/dev/null | wc -l | tr -d ' ')
+  fi
+
+  if [ "$map_count" -eq 0 ]; then
+    return 0
+  fi
+
+  if [ "$FORCE_INJECT" = true ]; then
+    echo "💉 [Inject] sourcemaps inject 실행 중: $dir_path"
+    if [ "$DRY_RUN" = false ]; then
+      $SENTRY_CLI sourcemaps inject "$dir_path"
+    fi
+  fi
+
+  local cmd_args=("$SENTRY_CLI" "sourcemaps" "upload" "--org" "$SENTRY_ORG" "--project" "$SENTRY_PROJECT")
+  if [ "$INCLUDE_RC" = false ]; then
+    cmd_args+=("--ignore" "*-rc*" "--ignore" "*rc-*")
+  fi
+
+  if [ -n "$release_name" ] && [ "$DEBUG_ID_ONLY" = false ]; then
+    cmd_args+=("--release" "$release_name")
+    echo "📤 Uploading: $dir_path (.map ${map_count}개) -> Release: [${release_name}]"
+  else
+    echo "📤 Uploading: $dir_path (.map ${map_count}개) -> Debug ID 기반"
+  fi
+
+  cmd_args+=("$dir_path")
+
+  if [ "$DRY_RUN" = true ]; then
+    echo "   (Dry-run) 실행 명령: ${cmd_args[*]}"
+  else
+    "${cmd_args[@]}"
+  fi
+  echo ""
+}
+
+# 10. 앱별 처리 및 릴리즈 정보 파싱
+TOTAL_PROCESSED=0
+
+if [ ${#APPS_TO_PROCESS[@]} -eq 1 ] && [ -z "${APPS_TO_PROCESS[0]}" ]; then
+  upload_directory "$BASE_DIR" ""
+  TOTAL_PROCESSED=1
+else
+  for APP in "${APPS_TO_PROCESS[@]}"; do
+    CANDIDATE_DISTS=(
+      "${BASE_DIR}/apps/${APP}/dist"
+      "${BASE_DIR}/${APP}/dist"
+      "${BASE_DIR}/dist/mobile.pdp.${APP}"
+      "${BASE_DIR}/dist/mobile.${APP}"
+      "${BASE_DIR}/dist"
+    )
+
+    APP_DIST=""
+    for d in "${CANDIDATE_DISTS[@]}"; do
+      if [ -d "$d" ]; then
+        APP_DIST="$d"
+        break
+      fi
+    done
+
+    if [ -z "$APP_DIST" ]; then
+      continue
+    fi
+
+    RELEASE_TAG=""
+    if [ "$DEBUG_ID_ONLY" = false ]; then
+      CANDIDATE_LATEST=(
+        "apps/${APP}/latest.txt"
+        "${BASE_DIR}/apps/${APP}/latest.txt"
+        "${BASE_DIR}/${APP}/latest.txt"
+        "${APP_DIST}/latest.txt"
+      )
+
+      LATEST_FILE=""
+      for f in "${CANDIDATE_LATEST[@]}"; do
+        if [ -f "$f" ]; then
+          LATEST_FILE="$f"
+          break
+        fi
+      done
+
+      if [ -n "$LATEST_FILE" ]; then
+        VERSION=$(awk '{print $2}' "$LATEST_FILE" | head -n 1)
+        if [ -n "$VERSION" ]; then
+          if [ "$INCLUDE_RC" = false ] && [[ "$VERSION" =~ rc ]]; then
+            echo "⏭️ [${APP}] RC 버전(${VERSION}) 감지 - 상용만 업로드하므로 건너뜁니다."
+            continue
+          fi
+          RELEASE_TAG="${APP}@${VERSION}"
+        fi
+      fi
+    fi
+
+    upload_directory "$APP_DIST" "$RELEASE_TAG"
+    TOTAL_PROCESSED=$((TOTAL_PROCESSED + 1))
+  done
+fi
+
+if [ "$TOTAL_PROCESSED" -eq 0 ]; then
+  echo "⚠️ 업로드할 대상 디렉토리나 .map 파일을 찾지 못했습니다."
+else
+  echo "✅ 소스맵 처리 완료 (총 ${TOTAL_PROCESSED}개 앱/디렉토리)."
+fi
