@@ -55,6 +55,7 @@ done
 | `team-pr-chaining.md` | true | Stacked PR 표기 (team/PR 호스팅 맥락) |
 | `output-writing.md` | false (PR 작성 시 Read) | PR 디스크립션 — 기획/작업/리뷰기한(`-`), 목적 우선·짧은 문장 |
 | `bh-token-lookup.md` | false (토큰 필요 시 Read) | 인증 토큰 탐색 순서 SSOT — Cursor accessToken vs Analytics API Key, credentials.env / mcp.json / Keychain 순회 |
+| `bh-ticket-maker.md` | false (티켓 생성 시 Read) | Jira 티켓 생성 CLI(`bh-ticket-maker`) 사용 지침 — 기본 프로젝트 COMPANY, 결함 유형, 담당자, 시작일·종료일 미지원 |
 
 ## 스킬 목록
 

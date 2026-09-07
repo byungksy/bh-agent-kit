@@ -22,5 +22,9 @@
   "bh-token-lookup": {
     "description": "인증 토큰 탐색 순서(SSOT). 새 bh-* 스크립트 작성·토큰 없음 실패·Cursor 사용량/랭킹/analytics 조회 시 Read. Cursor accessToken(state.vscdb) vs Analytics API Key(credentials.env) 구분, mcp.json/bh-secrets/Keychain 순회 규정",
     "alwaysApply": false
+  },
+  "bh-ticket-maker": {
+    "description": "Jira 티켓 생성 시 bh-ticket-maker CLI 사용 지침. 기본 프로젝트 COMPANY, 기본 유형 결함(Defect/Bug), 기본 담당자, 시작일/종료일 미지원 규정",
+    "alwaysApply": false
   }
 }
