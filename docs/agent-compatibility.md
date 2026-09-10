@@ -34,6 +34,9 @@ alwaysApply: false
 - `alwaysApply: false`: 시맨틱 인덱싱을 통해 사용자의 의도나 파일 패턴에 맞을 때만 동적 주입 (예: `bh-create-pr`, `bh-ticket-maker`)
 
 ### ② Kiro CLI 형식 (`~/.kiro/steering/`)
+> `bh-agent-kit`에는 별도의 `steering/` 디렉토리가 없습니다. `rules/*.md`가 아래 동기화 절차(§4-①)로
+> `~/.kiro/steering/`에 심볼릭 링크되어 그 역할을 그대로 수행합니다 — `rules/` = Kiro의 steering.
+
 Kiro는 `inclusion` 키를 기준으로 룰을 제어합니다:
 ```yaml
 ---
