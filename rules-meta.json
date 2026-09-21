@@ -30,5 +30,9 @@
   "bh-create-pr": {
     "description": "Bitbucket PR 생성 및 설명 작성 시 bh-create-pr CLI 사용 지침. 하이브리드 모드(--context -> -s/-d 주입), Bugfix 필수 3섹션(이슈현상/원인/해결방법), Bitbucket markdown 정규화 규정",
     "alwaysApply": false
+  },
+  "type-change-ripple-check": {
+    "description": "공유 타입·데이터 구조 변경 전 소비자 전체 추적 — 서버로 그대로 전송되는 객체에 필드 추가 전 직렬화 경로·소비자·제거 코드 확인",
+    "alwaysApply": true
   }
 }
