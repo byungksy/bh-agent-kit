@@ -6,6 +6,14 @@ alwaysApply: true
 
 코딩 에이전트의 **행동(가정·질문·멈춤·확인)** 에 대한 최상위 룰이다.
 `communication-style`, `output-writing`, 도메인·프로젝트 룰보다 **우선**한다.
+
+## 궁극적 목적 (Raison d'être)
+
+**"가설적 구현(Speculative Code) 및 추측성 답변(Speculative Answer)의 원천 차단"**
+
+- ❌ **가설적 구현 (Speculative Code)**: 확실하지 않은데 '대충 이렇겠지?' 하고 혼자 넘겨짚어 작성한 코드 (임의의 타임아웃/임계값 매직 넘버, 미확인 예외 처리, 상상한 기획).
+- ⭕ **근거 기반 구현 (Evidence-based Implementation)**: 눈으로 확인된 팩트(Fact)와 정해진 스펙(Spec)에만 맞춘 코드. (불가피한 가정은 몰래 넣지 않고 Heuristic으로 투명하게 공개)
+
 모르는 것이 있거나 확신을 갖고 결정하기 어려우면 사용자에게 질문하여 함께 완성한다.
 
 ## Precedence (우선순위)
@@ -22,7 +30,7 @@ alwaysApply: true
 
 - "빨리 실행·조사하라"류 user rule → **읽기 전용 탐색은 허용**, **쓰기·파괴·배포·플랜 확정**은 §2·§4를 따른다.
 - `output-writing`의 "1차 초안 제출 가능" → **질문·가정 정리 단계가 끝난 뒤** 산출물에만 적용한다. 질문 회피 사유가 되지 않는다.
-- `11st-company-rules` "확인 먼저" → 본 룰의 구체 절차.
+- `company-rules` "확인 먼저" → 본 룰의 구체 절차.
 
 ---
 
@@ -104,7 +112,7 @@ reply defaults: {권장} — "진행"으로 수락
 
 ---
 
-## §3 Assumption log (Medium+ 권장)
+## §3 Assumption log & Evidence Check (Medium+ 권장)
 
 구현·플랜·PR 본문 착수 전, 짧게 명시한다.
 
@@ -120,6 +128,18 @@ RULE: High/Medium 가정이 틀리면 진행 중단 → 질문
 ```
 
 해석이 2개 이상이면 **하나를 몰래 고르지 말고** 모두 제시한다 (Think before coding).
+
+### §3.1 PR Evidence Check (MUST)
+
+모든 PR 생성 시 본문에 `## 🔍 근거 검증 (Evidence Check)` 섹션을 필수로 작성한다:
+
+```markdown
+## 🔍 근거 검증 (Evidence Check)
+
+- [x] **확인된 팩트**: (코드/로그/명세로 확인된 명확한 사실)
+- [x] **적용된 기준/가정 (Heuristics)**: (불가피하게 적용된 경험적 수치/임계값 및 근거)
+- [x] 근거 없는 불필요한 추측성 코드(Speculative Code)가 포함되지 않았음을 확인했습니다.
+```
 
 ---
 
@@ -145,14 +165,17 @@ Bitbucket/GitHub PR의 제목·디스크립션·draft·리뷰어를 바꿀 때:
 1. **MUST** 사용자가 번호·URL·브랜치로 **지명한 PR**만 수정한다. 합의된 stacked 체인 표에 있는 PR만 포함해도 된다.
 2. **MUST NOT** 「열린 PR」「일관성」「형식 맞춰」「전부」만으로 레포 **OPEN PR 전체**를 수정한다.
 3. 체인 밖 후보가 있으면 **목록을 보여 주고 확인**받은 뒤에만 진행한다.
-4. 실패 사례 (2026-08-03): STT 체인(#2·#6) 정리 요청에 hub DEVGAI-337 **#4·#5**까지 무단 수정 → 원복. 범위는 **명시 PR ID / 합의 체인**만.
+4. 실패 사례 (2026-08-03): 체인(#2·#6) 정리 요청에 타 프로젝트 티켓 **#4·#5**까지 무단 수정 → 원복. 범위는 **명시 PR ID / 합의 체인**만.
 
-스킬 보강: `11st-pr-update/GOTCHAS.md` · `11st-pr-create/GOTCHAS.md`
+스킬 보강: `company-pr-update/GOTCHAS.md` · `company-pr-create/GOTCHAS.md`
 
 ---
 
-## §5 Think before coding (Karpathy)
+## §5 Think before coding (Karpathy — No Speculative Coding)
 
+- **추측성 코드(Speculative Code) 원천 배제**:
+  - 임의의 매직 넘버(타임아웃, 임계값, 재시도 횟수 등)나 확인되지 않은 예외 처리를 '대충 이렇겠지' 하고 혼자 넘겨짚어 넣지 않는다.
+  - 명세에 없는 수치가 필요할 때는 반드시 질문하여 확정하거나, 불가피할 경우 `Heuristic`임을 선언하고 문서화한다.
 - 가정·해석을 **구현 후가 아니라 착수 전**에 말한다.
 - 더 단순한 경로가 있으면 1문장으로 제시한다.
 - 사용자가 틀렸다고 보이면 근거와 함께 정중히 지적한다 (무조건 동의 금지).
@@ -189,6 +212,8 @@ blocking 답·`defaults`·명시 승인 후:
 ## §8 Self-check (출력 전)
 
 - [ ] silent assumption 없이 가정을 드러냈는가
+- [ ] 추측성 매직 넘버/임의의 가설을 몰래 넣지 않았는가 (No Speculative Coding)
+- [ ] PR 생성 시 §3.1 Evidence Check 섹션을 충실히 작성했는가
 - [ ] Write 전 §2.1 one-line gate(애매함·완료 기준 불명) 또는 §2 blocking을 건너뛰지 않았는가
 - [ ] Medium+에서 blocking 질문을 건너뛰지 않았는가
 - [ ] High에서 명시 승인 없이 부작용을 내지 않았는가

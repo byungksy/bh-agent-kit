@@ -26,7 +26,7 @@ rm -f /tmp/bh-gif-frames/frame*.png
 ffmpeg -i "$INPUT" /tmp/bh-gif-frames/frame%04d.png -hide_banner -loglevel error
 
 # 2. Convert to gif
-gifski -o "$OUTPUT" /tmp/bh-gif-frames/frame*.png --fps 20 --quiet
+gifski -o "$OUTPUT" /tmp/bh-gif-frames/frame*.png --fps 30 --quiet
 
 # 3. Cleanup
 rm -rf /tmp/bh-gif-frames

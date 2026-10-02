@@ -50,7 +50,7 @@ done
 | :--- | :--- | :--- | :--- |
 | **Cursor IDE** | `~/.cursor/rules/*.mdc` (frontmatter 변환) | `skills/*/SKILL.md` (MCP/Subagent) | 터미널 bash |
 | **Kiro CLI** | `~/.kiro/steering/*.md` (심볼릭 링크) | `~/.kiro/skills/*/SKILL.md` | bash 도구 |
-| **Antigravity** | `~/.gemini/config/rules/*.md` | `~/.gemini/config/skills/` | `run_command` |
+| **Antigravity** | `~/.gemini/config/AGENTS.md` (단일 파일 병합) | `~/.gemini/config/skills/` | `run_command` |
 | **Claude / Codex** | `AGENTS.md` / `~/.agents/` | Slash Commands | bash 도구 |
 
 - 상세 가이드: [`docs/agent-compatibility.md`](docs/agent-compatibility.md) / [`docs/kiro-porting.md`](docs/kiro-porting.md)
