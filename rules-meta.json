@@ -27,6 +27,10 @@
     "description": "Jira 티켓 생성 시 bh-ticket-maker CLI 사용 지침. 기본 프로젝트 COMPANY, 기본 유형 결함(Defect/Bug), 기본 담당자, 시작일/종료일 미지원 규정",
     "alwaysApply": false
   },
+  "bh-status-board": {
+    "description": "Jira 티켓 작업 세션을 bh-현황판에 attach/report로 확정 연결. 로그 자동 추출은 후보로만 취급하고 실제 작업 티켓만 연결",
+    "alwaysApply": true
+  },
   "bh-create-pr": {
     "description": "Bitbucket PR 생성 및 설명 작성 시 bh-create-pr CLI 사용 지침. 하이브리드 모드(--context -> -s/-d 주입), Bugfix 필수 3섹션(이슈현상/원인/해결방법), Bitbucket markdown 정규화 규정",
     "alwaysApply": false
