@@ -12,7 +12,7 @@
 | :--- | :--- | :--- | :--- | :--- |
 | **Cursor IDE** | `~/.cursor/rules/*.mdc` | `alwaysApply: bool`<br>`description: str`<br>`globs: str` | Bash Terminal Tool | `rules/*.md` + `rules-meta.json`을 조합하여 `.mdc`로 자동 변환 |
 | **Kiro CLI** | `~/.kiro/steering/*.md` | `inclusion: always \| manual \| fileMatch` | Bash Tool | `rules/*.md`를 심볼릭 링크로 직접 참조 |
-| **Antigravity** | `~/.gemini/config/AGENTS.md` | 마크다운 헤더 기반 병합 (`merge_agents_md`) | `run_command` | `sync-to-agents.sh` 파이프라인으로 `AGENTS.md`에 자동 병합 |
+| **Antigravity** | `~/.gemini/config/AGENTS.md` | 마크다운 헤더 기반 병합 (`merge_agents_md`) | `run_command` | `~/.gemini/skills/` 스킬 디렉터리 참조. `sync-to-agents.sh` 파이프라인에서 툴킷 소유 스킬(`11st-tc-verify` 등) 심볼릭 링크 유지 |
 | **Claude Code** | `CLAUDE.md` / `~/.claude/` | 마크다운 헤더 / 시스템 프롬프트 | Bash Tool | `sync-to-agents.sh` 파이프라인으로 동기화 |
 | **Codex** | `AGENTS.md` / `~/.codex/` | 마크다운 헤더 기반 | Bash Tool | 파일명 순서 기반 로드 (`00-inquiry-first.md` 최상단) |
 
