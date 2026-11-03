@@ -38,5 +38,9 @@
   "type-change-ripple-check": {
     "description": "공유 타입·데이터 구조 변경 전 소비자 전체 추적 — 서버로 그대로 전송되는 객체에 필드 추가 전 직렬화 경로·소비자·제거 코드 확인",
     "alwaysApply": true
+  },
+  "prompt-auto-enhance": {
+    "description": "모호하고 짧은 작업 지시 시 prompt-enhance 원칙을 자동 발동하여 의도·맥락·완료기준을 구조화해 제안하는 조건부 룰",
+    "alwaysApply": true
   }
 }
